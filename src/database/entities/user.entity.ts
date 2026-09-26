@@ -42,6 +42,20 @@ export class User extends BaseEntity {
   @Exclude()
   mfaSecret: string;
 
+  // Last two-factor time step accepted: a code is good once (replay protection)
+  @Column({ type: 'bigint', nullable: true })
+  @Exclude()
+  mfaLastUsedStep: string | null;
+
+  // Wrong passwords / codes in a row; reaching the limit locks the account a while
+  @Column({ type: 'integer', default: 0 })
+  @Exclude()
+  failedLoginCount: number;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  @Exclude()
+  lockedUntil: Date | null;
+
   @Column({
     type: 'enum',
     enum: UserStatus,

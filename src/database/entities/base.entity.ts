@@ -29,8 +29,8 @@ export abstract class BaseEntityWithVersion extends BaseEntity {
 
 /**
  * Base entity for tenant-scoped data
+ * Inherits id, createdAt, updatedAt from BaseEntity
  */
 export abstract class TenantBaseEntity extends BaseEntity {
-  @PrimaryGeneratedColumn('uuid')
-  id: string;
+  // tenantId will be defined in concrete entities that extend this
 }

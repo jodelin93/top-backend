@@ -1,3 +1,4 @@
+import './pg-types';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import * as dotenv from 'dotenv';
 import { join } from 'path';

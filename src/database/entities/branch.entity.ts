@@ -7,7 +7,7 @@ import {
   Unique,
   OneToMany,
 } from 'typeorm';
-import { BaseEntity } from './base.entity';
+import { BaseEntityWithVersion } from './base.entity';
 import { Tenant } from './tenant.entity';
 import { Register } from './register.entity';
 
@@ -18,9 +18,11 @@ export enum BranchStatus {
 
 @Entity('branches')
 @Unique('uq_branch_code', ['tenantId', 'code'])
+@Unique('uq_branch_id_tenant', ['id', 'tenantId'])
 @Index(['tenantId'])
 @Index(['status'], { where: "status = 'active'" })
-export class Branch extends BaseEntity {
+// version: optimistic concurrency for admin edits (If-Match)
+export class Branch extends BaseEntityWithVersion {
   @Column({ type: 'uuid', nullable: false })
   tenantId: string;
 
@@ -76,7 +78,7 @@ export class Branch extends BaseEntity {
 
   // Relations
   @ManyToOne(() => Tenant, (tenant) => tenant.branches, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'tenant_id' })
+  @JoinColumn({ name: 'tenantId' })
   tenant: Tenant;
 
   @OneToMany(() => Register, (register) => register.branch)

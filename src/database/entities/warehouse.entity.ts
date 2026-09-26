@@ -24,6 +24,7 @@ export enum WarehouseStatus {
 
 @Entity('warehouses')
 @Unique('uq_warehouse_code', ['tenantId', 'code'])
+@Unique('uq_warehouse_id_tenant', ['id', 'tenantId'])
 @Index(['tenantId'])
 export class Warehouse extends BaseEntity {
   @Column({ type: 'uuid', nullable: false })
@@ -71,7 +72,7 @@ export class Warehouse extends BaseEntity {
 
   // Relations
   @ManyToOne(() => Tenant, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'tenant_id' })
+  @JoinColumn({ name: 'tenantId' })
   tenant: Tenant;
 
   @OneToMany(() => InventoryLocation, (location) => location.warehouse)

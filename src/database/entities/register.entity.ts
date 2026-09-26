@@ -1,12 +1,5 @@
-import {
-  Entity,
-  Column,
-  Index,
-  ManyToOne,
-  JoinColumn,
-  Unique,
-} from 'typeorm';
-import { BaseEntity } from './base.entity';
+import { Entity, Column, Index, ManyToOne, JoinColumn, Unique } from 'typeorm';
+import { BaseEntityWithVersion } from './base.entity';
 import { Tenant } from './tenant.entity';
 import { Branch } from './branch.entity';
 import { InventoryLocation } from './inventory-location.entity';
@@ -16,10 +9,22 @@ export enum RegisterStatus {
   INACTIVE = 'inactive',
 }
 
+/**
+ * How the register's drawers are run:
+ * - assigned: one cashier per drawer shift (a second cashier opens another drawer)
+ * - shared: cashiers share the drawer's one shift; each sale keeps its cashier and
+ *   the drawer is counted once at close
+ */
+export enum DrawerPolicy {
+  ASSIGNED = 'assigned',
+  SHARED = 'shared',
+}
+
 @Entity('registers')
 @Unique('uq_register_code', ['tenantId', 'code'])
 @Index(['branchId'])
-export class Register extends BaseEntity {
+// version: optimistic concurrency for admin edits (If-Match)
+export class Register extends BaseEntityWithVersion {
   @Column({ type: 'uuid', nullable: false })
   tenantId: string;
 
@@ -35,8 +40,14 @@ export class Register extends BaseEntity {
   @Column({ type: 'uuid', nullable: true })
   defaultLocationId: string;
 
-  @Column({ type: 'uuid', nullable: true })
-  drawerId: string;
+  // Drawers are rows of `drawers` (one is created with every register)
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: DrawerPolicy.ASSIGNED,
+    nullable: false,
+  })
+  drawerPolicy: DrawerPolicy;
 
   @Column({ type: 'jsonb', default: {}, nullable: false })
   settings: Record<string, any>;
@@ -51,22 +62,22 @@ export class Register extends BaseEntity {
 
   // Relations
   @ManyToOne(() => Tenant, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'tenant_id' })
+  @JoinColumn({ name: 'tenantId' })
   tenant: Tenant;
 
   @ManyToOne(() => Branch, (branch) => branch.registers, {
     onDelete: 'CASCADE',
   })
   @JoinColumn([
-    { name: 'tenant_id', referencedColumnName: 'tenantId' },
-    { name: 'branch_id', referencedColumnName: 'id' },
+    { name: 'tenantId', referencedColumnName: 'tenantId' },
+    { name: 'branchId', referencedColumnName: 'id' },
   ])
   branch: Branch;
 
   @ManyToOne(() => InventoryLocation, { nullable: true })
   @JoinColumn([
-    { name: 'tenant_id', referencedColumnName: 'tenantId' },
-    { name: 'default_location_id', referencedColumnName: 'id' },
+    { name: 'tenantId', referencedColumnName: 'tenantId' },
+    { name: 'defaultLocationId', referencedColumnName: 'id' },
   ])
   defaultLocation: InventoryLocation;
 }

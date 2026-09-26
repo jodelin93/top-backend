@@ -4,6 +4,21 @@
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
-  }
+    "^.+\\.ts$": [
+      "ts-jest",
+      {
+        "tsconfig": {
+          "module": "commonjs",
+          "moduleResolution": "node10",
+          "resolvePackageJsonExports": false
+        }
+      }
+    ],
+    "node_modules/.+\\.js$": "<rootDir>/jest/esm-to-cjs.js"
+  },
+  "transformIgnorePatterns": [
+    "/node_modules/(?!(@nestjs/(typeorm|config|jwt|passport|bull|bull-shared|mapped-types)|uuid)/)"
+  ],
+  "maxWorkers": 1,
+  "setupFiles": ["<rootDir>/jest/e2e-env.ts"]
 }
