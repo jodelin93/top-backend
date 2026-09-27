@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DeepPartial, Repository } from 'typeorm';
+import { assertValidityWindow } from '../common/validation/date-rules';
 import { TenantCrudService } from '../common/crud/tenant-crud.service';
 import {
   Discount,
@@ -27,6 +28,7 @@ export class DiscountsService extends TenantCrudService<Discount> {
 
   async create(tenantId: string, data: DeepPartial<Discount>) {
     this.validateShape({ ...data } as Discount);
+    assertValidityWindow(data);
     return super.create(tenantId, {
       ...data,
       code: String(data.code).toUpperCase(),
@@ -36,6 +38,7 @@ export class DiscountsService extends TenantCrudService<Discount> {
   async update(tenantId: string, id: string, data: DeepPartial<Discount>) {
     const current = await this.findOne(tenantId, id);
     this.validateShape({ ...current, ...data } as Discount);
+    assertValidityWindow(data, current);
     if (data.code) {
       data = { ...data, code: String(data.code).toUpperCase() };
     }

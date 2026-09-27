@@ -29,6 +29,7 @@ import {
   RequirePermissions,
 } from '../auth/decorators/permissions.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import { SkipCsrf } from '../auth/decorators/skip-csrf.decorator';
 import { User } from '../database/entities/user.entity';
 import { PaymentsService } from './payments.service';
 import { ReconciliationService } from './reconciliation.service';
@@ -226,6 +227,8 @@ export class PaymentWebhooksController {
 
   @Post(':provider')
   @Public()
+  // Signed by the provider's server, never sent with a browser session
+  @SkipCsrf()
   @HttpCode(HttpStatus.OK)
   webhook(
     @Param('provider') provider: string,

@@ -59,7 +59,10 @@ import {
   canAccessBranch,
 } from '../auth/branch-scope';
 import { SettingsService, StoreSettings } from '../settings/settings.service';
-import { PricingService } from '../price-lists/pricing.service';
+import {
+  CustomerGroupPricing,
+  PricingService,
+} from '../price-lists/pricing.service';
 import { DiscountsService } from '../discounts/discounts.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { ApprovalsService } from '../approvals/approvals.service';
@@ -153,6 +156,17 @@ interface PreparedSale {
   giftCards: { amount: number; code: string | null }[];
   // Unit of each variant (measured items: kg, m, l) for receipts
   units: Map<string, VariantUnit>;
+  // The customer's group pricing, and the group discount given on this sale
+  group: CustomerGroupPricing | null;
+  groupDiscount: GroupDiscountApplied | null;
+}
+
+/** Customer group discount given on a sale (sale.metadata.groupDiscount) */
+export interface GroupDiscountApplied {
+  groupId: string | null;
+  name: string | null;
+  percent: number;
+  amount: number;
 }
 
 // A line of an offline sale that took more units than the location had (D018)
@@ -462,6 +476,8 @@ export class SalesService implements OnModuleInit {
             cart: undefined,
             cartDiscountReason: dto.cartDiscount?.reason?.trim() || undefined,
             discountId: discount?.id ?? null,
+            // Customer group discount (printed as its own line on the receipt)
+            groupDiscount: prepared.groupDiscount ?? undefined,
             estimateId: dto.estimateId ?? null,
             changeTender: payments.changeTender,
             // Counted at checkout (also while waiting for a card); given back if cancelled
@@ -1534,7 +1550,10 @@ export class SalesService implements OnModuleInit {
    */
   private async prepare(
     tenantId: string,
-    dto: QuoteSaleDto & { offlineCapturedAt?: string },
+    dto: QuoteSaleDto & {
+      offlineCapturedAt?: string;
+      groupDiscountPercent?: number;
+    },
     offline: boolean,
   ): Promise<PreparedSale> {
     const register = await this.dataSource.getRepository(Register).findOne({
@@ -1616,18 +1635,26 @@ export class SalesService implements OnModuleInit {
       offline && dto.offlineCapturedAt
         ? new Date(dto.offlineCapturedAt)
         : undefined;
+    // The customer's group: its price list prices the sale automatically (no
+    // price override, see needsPriceOverride) unless another list is chosen,
+    // and its discount is taken off as the group discount
+    const group = await this.pricingService.customerGroupPricing(
+      tenantId,
+      customer?.groupId,
+    );
+    const priceListId = dto.priceListId ?? group?.priceListId ?? undefined;
     const prices = await this.pricingService.resolvePrices(
       tenantId,
       variantList,
-      { branchId: branch.id, priceListId: dto.priceListId, at: pricedAt },
+      { branchId: branch.id, priceListId, at: pricedAt },
     );
     // A chosen list that is not for everyone (wholesale, staff, ...) and not the
     // customer's group list: its prices are price changes (pos.price.override)
     const restrictedList =
-      !!dto.priceListId &&
+      !!priceListId &&
       (await this.pricingService.needsPriceOverride(
         tenantId,
-        dto.priceListId,
+        priceListId,
         customer?.groupId ?? null,
       ));
     const catalog = restrictedList
@@ -1676,6 +1703,14 @@ export class SalesService implements OnModuleInit {
       ),
     );
 
+    // Group discount: the group's, online. Offline, what the till gave (it
+    // happened; more than the group's is flagged below like a manual discount).
+    // Not on an estimate's sale: it is sold at the prices it quoted.
+    const entitledGroupPercent = quoted ? 0 : (group?.discountPercent ?? 0);
+    const groupDiscountPercent = offline
+      ? Math.min(Math.max(Number(dto.groupDiscountPercent ?? 0), 0), 100)
+      : entitledGroupPercent;
+
     const variants = new Map<string, ProductVariant>();
     const catalogPrices = new Map<string, number>();
     const quotedDiscounts = new Map<string, number>();
@@ -1721,6 +1756,7 @@ export class SalesService implements OnModuleInit {
             : null,
       },
       cartDiscount: dto.cartDiscount,
+      groupDiscountPercent,
     };
     let calc = calculateSale(inputs, options);
     // Gift cards: their own lines, no tax, no discount (a liability, not revenue)
@@ -1756,6 +1792,27 @@ export class SalesService implements OnModuleInit {
       : cartDiscountPercent(inputs, options);
     const maxPercent = Number(settings.maxDiscountPercent);
     const overrides = requiredOverrides(overrideLines, cartPercent, maxPercent);
+    // The group discount is set by management: it needs no approval. Only an
+    // offline till giving more than the customer's group has counts as a
+    // manual discount (flagged in a conflict case when not allowed).
+    const extraGroupPercent =
+      Math.round((groupDiscountPercent - entitledGroupPercent) * 100) / 100;
+    if (offline && extraGroupPercent > 0) {
+      const permission: Permission =
+        extraGroupPercent > maxPercent
+          ? 'pos.discount.override'
+          : 'pos.discount';
+      if (!overrides.permissions.includes('pos.discount.override')) {
+        overrides.permissions = [
+          ...overrides.permissions.filter((p) => p !== 'pos.discount'),
+          permission,
+        ];
+      }
+      overrides.reasons.push(
+        `Group discount of ${groupDiscountPercent}% (customer's group: ${entitledGroupPercent}%)`,
+      );
+      overrides.maxPercent = Math.max(overrides.maxPercent, extraGroupPercent);
+    }
     // Discounts that need a manager's override also need a written reason
     const reasonsNeeded = {
       lines: overrideLines
@@ -1779,6 +1836,15 @@ export class SalesService implements OnModuleInit {
       reasonsNeeded,
       giftCards,
       units,
+      group,
+      groupDiscount: calc.groupDiscountAmount
+        ? {
+            groupId: group?.id ?? null,
+            name: group?.name ?? null,
+            percent: groupDiscountPercent,
+            amount: calc.groupDiscountAmount,
+          }
+        : null,
     };
   }
 
@@ -2315,12 +2381,18 @@ export class SalesService implements OnModuleInit {
     branch,
     catalogPrices,
     overrides,
+    group,
+    groupDiscount,
   }: PreparedSale) {
     return {
       currencyCode: branch.currencyCode,
       taxRate,
       discountCode: discount?.code ?? null,
       discountMessage: calc.discountMessage ?? null,
+      // The customer's group (price list used, discount %) and the group
+      // discount taken off this cart
+      customerGroup: group,
+      groupDiscount,
       subtotal: calc.subtotal,
       discountAmount: calc.discountAmount,
       taxAmount: calc.taxAmount,

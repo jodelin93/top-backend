@@ -636,3 +636,47 @@ describe('measured quantities (sold by weight / length / volume)', () => {
     expect(result).toMatchObject({ subtotal: 59.97, taxAmount: 4.95 });
   });
 });
+
+describe('customer group discount', () => {
+  it('is taken off every line after its manual discount, before a code', () => {
+    const result = calculateSale(
+      [line(100, 1, { discountPercent: 10 }), line(50)],
+      {
+        ...NO_TAX,
+        groupDiscountPercent: 10,
+        discount: code({ percentage: 10 }),
+      },
+    );
+    // 100 − 10 (line) − 9 (group) ; 50 − 5 (group); then 10% of 126 = 12.60
+    expect(result.groupDiscountAmount).toBe(14);
+    expect(result.discountAmount).toBe(36.6);
+    expect(result.total).toBe(113.4);
+  });
+
+  it('is left out of the result when there is none', () => {
+    const result = calculateSale([line(10)], NO_TAX);
+    expect(result).not.toHaveProperty('groupDiscountAmount');
+    expect(
+      calculateSale([line(10)], { ...NO_TAX, groupDiscountPercent: 0 }),
+    ).not.toHaveProperty('groupDiscountAmount');
+  });
+
+  it('comes before a manual cart discount and tax, and is capped at 100%', () => {
+    const result = calculateSale([line(20, 2)], {
+      taxRate: 10,
+      pricesIncludeTax: false,
+      groupDiscountPercent: 25,
+      cartDiscount: { type: 'fixed', value: 5 },
+    });
+    expect(result).toMatchObject({
+      subtotal: 40,
+      groupDiscountAmount: 10,
+      discountAmount: 15,
+      taxAmount: 2.5,
+      total: 27.5,
+    });
+    expect(
+      calculateSale([line(20)], { ...NO_TAX, groupDiscountPercent: 150 }).total,
+    ).toBe(0);
+  });
+});

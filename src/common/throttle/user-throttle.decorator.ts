@@ -1,9 +1,11 @@
 import { Throttle } from '@nestjs/throttler';
 import { heavyThrottle } from '../../config/throttle.config';
+import { extractSessionToken } from '../../auth/session-cookie';
 
 type TrackedRequest = {
   ip?: string;
   headers?: Record<string, string | string[] | undefined>;
+  cookies?: Record<string, string>;
   // Set by TenantThrottlerGuard: non-null only when the bearer token verified
   throttleIdentity?: string | null;
 };
@@ -17,8 +19,11 @@ type TrackedRequest = {
 export function userThrottleTracker(req: TrackedRequest): string {
   const fallback = `ip:${req.ip ?? 'unknown'}`;
   if (!req.throttleIdentity) return fallback;
-  const header = req.headers?.authorization;
-  const token = typeof header === 'string' ? header.split(' ')[1] : undefined;
+  // Session cookie (web app) or bearer token, as verified by the throttler guard
+  const token = extractSessionToken({
+    headers: req.headers ?? {},
+    cookies: req.cookies,
+  });
   const payload = token?.split('.')[1];
   if (!payload) return fallback;
   try {

@@ -13,6 +13,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsOnOrAfterField } from '../../common/validation/date-rules';
 
 /** POST /customers/:id/account/payments */
 export class RecordCustomerPaymentDto {
@@ -41,14 +42,14 @@ export class AdjustCustomerAccountDto {
 
 export class CreditEntriesQueryDto {
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   @Type(() => Number) @IsInt() @Min(1) @IsOptional() page?: number;
   @Type(() => Number) @IsInt() @Min(1) @Max(200) @IsOptional() limit?: number;
 }
 
 export class StatementQueryDto {
   @IsDateString() from: string;
-  @IsDateString() to: string;
+  @IsDateString() @IsOnOrAfterField('from') to: string;
 }
 
 export class AgingQueryDto {

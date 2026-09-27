@@ -11,6 +11,7 @@ import {
 } from '@nestjs/throttler';
 import type { JwtPayload } from '../auth.service';
 import { IP_THROTTLE_KEY } from '../decorators/throttle.decorator';
+import { CookieRequest, extractSessionToken } from '../session-cookie';
 
 export const TENANT_THROTTLER = 'tenant';
 
@@ -27,6 +28,15 @@ export function throttleIdentity(
 ): string | null {
   const [type, token] = authorization?.split(' ') ?? [];
   if (type !== 'Bearer' || !token) return null;
+  return tokenThrottleIdentity(token, verify);
+}
+
+/** Same, for a raw token (from the session cookie or the bearer header). */
+export function tokenThrottleIdentity(
+  token: string | null | undefined,
+  verify: (token: string) => JwtPayload,
+): string | null {
+  if (!token) return null;
   try {
     const payload = verify(token);
     if (payload.tid) return `tenant:${payload.tid}`;
@@ -56,13 +66,14 @@ export class TenantThrottlerGuard extends ThrottlerGuard {
 
   protected async handleRequest(props: ThrottlerRequest): Promise<boolean> {
     const { context, throttler } = props;
-    const req = context.switchToHttp().getRequest<{
-      headers: Record<string, string | undefined>;
-      throttleIdentity?: string | null;
-    }>();
+    const req = context
+      .switchToHttp()
+      .getRequest<CookieRequest & { throttleIdentity?: string | null }>();
     if (req.throttleIdentity === undefined) {
-      req.throttleIdentity = throttleIdentity(req.headers.authorization, (t) =>
-        this.jwtService.verify<JwtPayload>(t),
+      // Session cookie (web app) or bearer token (API clients)
+      req.throttleIdentity = tokenThrottleIdentity(
+        extractSessionToken(req),
+        (t) => this.jwtService.verify<JwtPayload>(t),
       );
     }
     const identity = req.throttleIdentity;

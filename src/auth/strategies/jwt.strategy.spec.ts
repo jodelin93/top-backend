@@ -39,4 +39,22 @@ describe('JwtStrategy', () => {
     // Refused before anything is looked up
     expect(users.findOne).not.toHaveBeenCalled();
   });
+
+  it('takes the token from the session cookie first, else the bearer header', () => {
+    const extract = (
+      strategy as unknown as {
+        _jwtFromRequest: (req: object) => string | null;
+      }
+    )._jwtFromRequest;
+    expect(
+      extract({
+        headers: { authorization: 'Bearer from-header' },
+        cookies: { pos_session: 'from-cookie' },
+      }),
+    ).toBe('from-cookie');
+    expect(extract({ headers: { authorization: 'Bearer from-header' } })).toBe(
+      'from-header',
+    );
+    expect(extract({ headers: {} })).toBeNull();
+  });
 });

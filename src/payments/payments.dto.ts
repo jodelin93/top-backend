@@ -16,6 +16,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { MAX_MONEY } from '../common/validation/money';
+import { IsNotFutureDate } from '../common/validation/date-rules';
 
 export class SetMethodProviderDto {
   @IsString() @IsNotEmpty() @MaxLength(50) provider: string;
@@ -32,7 +33,7 @@ export class SettlementLineInput {
   @Max(MAX_MONEY)
   @IsOptional()
   fee?: number;
-  @IsDateString() @IsOptional() date?: string;
+  @IsDateString() @IsNotFutureDate() @IsOptional() date?: string;
 }
 
 export class ImportSettlementDto {

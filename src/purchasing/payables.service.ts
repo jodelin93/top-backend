@@ -30,6 +30,7 @@ import {
   CreateSupplierPaymentDto,
   SupplierDocumentsQueryDto,
 } from './purchasing.dto';
+import { storeTimezone, todayIn } from '../common/validation/date-rules';
 
 type Source =
   | { kind: 'payment'; row: SupplierPayment }
@@ -101,7 +102,9 @@ export class PayablesService {
           supplierId: supplier.id,
           creditType: 'manual',
           returnId: null,
-          creditDate: (dto.creditDate ?? isoDate(new Date())).slice(0, 10),
+          creditDate: (
+            dto.creditDate ?? todayIn(await storeTimezone(manager, tenantId))
+          ).slice(0, 10),
           amount: fromCents(toCents(dto.amount)),
           currencyCode: supplier.currencyCode ?? currencyCode,
           reference: dto.reference ?? null,
@@ -288,7 +291,9 @@ export class PayablesService {
           tenantId,
           paymentNumber,
           supplierId: supplier.id,
-          paymentDate: (dto.paymentDate ?? isoDate(new Date())).slice(0, 10),
+          paymentDate: (
+            dto.paymentDate ?? todayIn(await storeTimezone(manager, tenantId))
+          ).slice(0, 10),
           amount: fromCents(toCents(dto.amount)),
           currencyCode: supplier.currencyCode ?? currencyCode,
           method: dto.method,

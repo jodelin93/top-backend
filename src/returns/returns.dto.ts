@@ -30,6 +30,7 @@ import {
   PaymentInput,
   SaleItemInput,
 } from '../sales/sales.dto';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 export class ReturnItemInput {
   @IsUUID() saleItemId: string;
@@ -191,7 +192,7 @@ export class ListExchangesQueryDto {
 export class ListReturnsQueryDto {
   @IsEnum(ReturnType) @IsOptional() returnType?: ReturnType;
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   @IsEnum(ReturnStatus) @IsOptional() status?: ReturnStatus;
   @IsUUID() @IsOptional() saleId?: string;
   // Return number or original sale number

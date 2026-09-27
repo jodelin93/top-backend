@@ -10,8 +10,10 @@ import {
   Param,
   ParseEnumPipe,
   ParseUUIDPipe,
-  Request,
+  Req,
+  Res,
 } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import {
   AuthService,
   JwtPayload,
@@ -33,6 +35,20 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { AllowDuringMfaSetup } from './decorators/mfa-setup.decorator';
 import { AuthThrottle } from './decorators/throttle.decorator';
 import type { AuthUser } from './strategies/jwt.strategy';
+import {
+  clearSessionCookie,
+  deliverMfaPending,
+  deliverSession,
+} from './session-cookie';
+
+/**
+ * Session tokens reach the web app only as HttpOnly cookies (session-cookie.ts);
+ * the JSON keeps the user info. Clients sending `X-Auth-Mode: token` get the
+ * token in the body instead (accessToken) and use Authorization: Bearer.
+ */
+type SessionResponse = Omit<LoginResponse, 'accessToken'> & {
+  accessToken?: string;
+};
 
 @ApiTags('Authentication')
 @ApiBearerAuth('JWT-auth')
@@ -49,8 +65,20 @@ export class AuthController {
   @AuthThrottle() // brute-force protection, per IP
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() loginDto: LoginDto): Promise<LoginResponse> {
-    return this.authService.login(loginDto.email, loginDto.password);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResponse> {
+    const response = await this.authService.login(
+      loginDto.email,
+      loginDto.password,
+    );
+    // Second factor pending: the temporary token goes into the short-lived,
+    // verify-only pos_mfa cookie
+    return response.requiresMfa
+      ? deliverMfaPending(req, res, response)
+      : deliverSession(req, res, response);
   }
 
   /**
@@ -65,10 +93,15 @@ export class AuthController {
   @Post('mfa/verify')
   @HttpCode(HttpStatus.OK)
   async verifyMfa(
-    @Request() req: { user: JwtPayload },
+    @Req() req: Request & { user: JwtPayload },
     @Body() mfaTokenDto: MfaTokenDto,
-  ): Promise<LoginResponse> {
-    return this.authService.verifyMfaToken(req.user.sub, mfaTokenDto.token);
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResponse> {
+    return deliverSession(
+      req,
+      res,
+      await this.authService.verifyMfaToken(req.user.sub, mfaTokenDto.token),
+    );
   }
 
   /**
@@ -101,16 +134,19 @@ export class AuthController {
   async confirmMfa(
     @CurrentUser() user: AuthUser,
     @Body() mfaTokenDto: MfaTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<{
     success: boolean;
     message: string;
-    session?: LoginResponse;
+    session?: SessionResponse;
   }> {
     const success = await this.authService.confirmMfa(
       user.id,
       mfaTokenDto.token,
     );
-    const session = await this.authService.afterMfaEnabled(user);
+    const reissued = await this.authService.afterMfaEnabled(user);
+    const session = reissued && deliverSession(req, res, reissued);
 
     return {
       success,
@@ -224,8 +260,13 @@ export class AuthController {
   @AllowDuringMfaSetup()
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@CurrentUser() user: AuthUser) {
+  async logout(
+    @CurrentUser() user: AuthUser,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     await this.authService.logout(user);
+    clearSessionCookie(req, res);
     return { success: true };
   }
 
@@ -248,10 +289,16 @@ export class AuthController {
   @AllowDuringMfaSetup()
   @Post('switch-store')
   @HttpCode(HttpStatus.OK)
-  switchStore(
+  async switchStore(
     @CurrentUser() user: AuthUser,
     @Body() dto: SwitchStoreDto,
-  ): Promise<LoginResponse> {
-    return this.authService.switchStore(user, dto.tenantId);
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<SessionResponse> {
+    return deliverSession(
+      req,
+      res,
+      await this.authService.switchStore(user, dto.tenantId),
+    );
   }
 }

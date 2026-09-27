@@ -16,7 +16,9 @@ import { PriceList } from './price-list.entity';
 
 /**
  * A group of customers (e.g. "Staff", "Wholesale") with an optional default
- * price list and discount. Pricing doesn't apply these yet; they are stored for the POS.
+ * price list and discount. At the till (sales and quotes) the price list prices
+ * the group's customers automatically and the discount is taken off as the
+ * group discount (PricingService.customerGroupPricing, sale-calculator).
  */
 @Entity('customer_groups')
 @Unique('uq_customer_group_code', ['tenantId', 'code'])

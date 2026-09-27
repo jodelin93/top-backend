@@ -24,7 +24,10 @@ const bcrypt = require('bcrypt');
 
 /** Load DB_* (and the rest) from top-backend/.env without overriding real env vars */
 export function loadEnv() {
-  require('dotenv').config({ path: path.join(backendDir, '.env'), quiet: true });
+  require('dotenv').config({
+    path: path.join(backendDir, '.env'),
+    quiet: true,
+  });
 }
 
 export function dbConfig() {
@@ -62,7 +65,8 @@ export const PASSWORD = 'LoadTest123!';
 export async function createTenant(client, prefix = 'loadtest') {
   const run = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const slug = `${prefix}-${run}`;
-  if (slug === 'default-tenant') throw new Error('refusing to use default-tenant');
+  if (slug === 'default-tenant')
+    throw new Error('refusing to use default-tenant');
   const email = `${prefix}-owner-${run}@test.local`;
   const {
     rows: [tenant],
@@ -98,6 +102,8 @@ export function apiClient(baseUrl) {
         method,
         headers: {
           'Content-Type': 'application/json',
+          // API-client mode: token in the login body, bearer auth, CSRF check satisfied
+          'X-Auth-Mode': 'token',
           ...(token && { Authorization: `Bearer ${token}` }),
         },
         body: body ? JSON.stringify(body) : undefined,
@@ -139,9 +145,17 @@ export function apiClient(baseUrl) {
  * Sign in as the owner, initialize the store, create `productCount` products and
  * receive `stockPerProduct` units of each at the register's stock location.
  */
-export async function setupStore(api, email, { productCount = 5, stockPerProduct = 100000 } = {}) {
-  const login = await api.expect('POST', '/auth/login', { email, password: PASSWORD });
-  if (!login.accessToken) throw new Error('login returned no access token (MFA?)');
+export async function setupStore(
+  api,
+  email,
+  { productCount = 5, stockPerProduct = 100000 } = {},
+) {
+  const login = await api.expect('POST', '/auth/login', {
+    email,
+    password: PASSWORD,
+  });
+  if (!login.accessToken)
+    throw new Error('login returned no access token (MFA?)');
   api.setToken(login.accessToken);
 
   const init = await api.expect('POST', '/settings/initialize');
@@ -152,7 +166,9 @@ export async function setupStore(api, email, { productCount = 5, stockPerProduct
     (m) => m.code === 'CASH' || m.methodType === 'cash',
   );
   if (!registerId || !locationId || !cash) {
-    throw new Error('store has no register, stock location or cash method after initialize');
+    throw new Error(
+      'store has no register, stock location or cash method after initialize',
+    );
   }
 
   const variantIds = [];
@@ -169,9 +185,19 @@ export async function setupStore(api, email, { productCount = 5, stockPerProduct
   await api.expect('POST', '/inventory/receive', {
     locationId,
     reference: 'LOAD-PO-1',
-    items: variantIds.map((variantId) => ({ variantId, quantity: stockPerProduct, cost: 1 })),
+    items: variantIds.map((variantId) => ({
+      variantId,
+      quantity: stockPerProduct,
+      cost: 1,
+    })),
   });
-  return { token: login.accessToken, registerId, locationId, cashId: cash.id, variantIds };
+  return {
+    token: login.accessToken,
+    registerId,
+    locationId,
+    cashId: cash.id,
+    variantIds,
+  };
 }
 
 /** JS port of test/helpers/delete-tenant.ts. Uses (and keeps open) the given client. */
@@ -180,7 +206,8 @@ export async function deleteTenant(client, tenantId, userIds = new Set()) {
   const {
     rows: [t],
   } = await client.query(`SELECT slug FROM tenants WHERE id = $1`, [tenantId]);
-  if (t?.slug === 'default-tenant') throw new Error('refusing to delete default-tenant');
+  if (t?.slug === 'default-tenant')
+    throw new Error('refusing to delete default-tenant');
   try {
     await client.query(`SELECT set_config('app.audit_purge', 'on', false)`);
     const members = await client.query(
@@ -194,14 +221,17 @@ export async function deleteTenant(client, tenantId, userIds = new Set()) {
        WHERE table_schema = 'public' AND column_name = 'tenantId' AND table_name <> 'tenants'`,
     );
     let remaining = tables.rows.map((r) => r.table_name);
-    await client.query(`UPDATE categories SET "parentId" = NULL WHERE "tenantId" = $1`, [
-      tenantId,
-    ]);
+    await client.query(
+      `UPDATE categories SET "parentId" = NULL WHERE "tenantId" = $1`,
+      [tenantId],
+    );
     for (let pass = 0; pass < 12 && remaining.length > 0; pass++) {
       const blocked = [];
       for (const table of remaining) {
         try {
-          await client.query(`DELETE FROM "${table}" WHERE "tenantId" = $1`, [tenantId]);
+          await client.query(`DELETE FROM "${table}" WHERE "tenantId" = $1`, [
+            tenantId,
+          ]);
         } catch {
           blocked.push(table); // still referenced by another tenant table
         }
@@ -209,13 +239,17 @@ export async function deleteTenant(client, tenantId, userIds = new Set()) {
       remaining = blocked;
     }
     if (remaining.length > 0) {
-      throw new Error(`cleanup could not empty: ${remaining.join(', ')} (tenant ${tenantId})`);
+      throw new Error(
+        `cleanup could not empty: ${remaining.join(', ')} (tenant ${tenantId})`,
+      );
     }
     await client.query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
     // Delete triggers on catalog tables (products, variants, stock_levels, registers, ...)
     // append 'D' rows to sync_change_log, possibly after that table was emptied above.
     // It has no FK to tenants, so those rows would be orphaned: clear it last.
-    await client.query(`DELETE FROM sync_change_log WHERE "tenantId" = $1`, [tenantId]);
+    await client.query(`DELETE FROM sync_change_log WHERE "tenantId" = $1`, [
+      tenantId,
+    ]);
     await client.query(
       `DELETE FROM users WHERE id = ANY($1)
          AND NOT EXISTS (SELECT 1 FROM tenant_memberships m WHERE m."userId" = users.id)`,
@@ -240,16 +274,23 @@ export async function tenantLeftovers(client, tenantId, userIds = new Set()) {
     );
     total += r.rows[0].n;
   }
-  const t = await client.query(`SELECT count(*)::int n FROM tenants WHERE id = $1`, [tenantId]);
-  const u = await client.query(`SELECT count(*)::int n FROM users WHERE id = ANY($1)`, [
-    [...userIds],
-  ]);
+  const t = await client.query(
+    `SELECT count(*)::int n FROM tenants WHERE id = $1`,
+    [tenantId],
+  );
+  const u = await client.query(
+    `SELECT count(*)::int n FROM users WHERE id = ANY($1)`,
+    [[...userIds]],
+  );
   return { tenantRows: total, tenant: t.rows[0].n, users: u.rows[0].n };
 }
 
 export function percentile(sorted, p) {
   if (sorted.length === 0) return NaN;
-  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  const idx = Math.min(
+    sorted.length - 1,
+    Math.ceil((p / 100) * sorted.length) - 1,
+  );
   return sorted[Math.max(0, idx)];
 }
 

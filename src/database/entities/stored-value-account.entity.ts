@@ -17,7 +17,7 @@ export enum StoredValueStatus {
 
 /**
  * Gift cards and store credit (spec §11): a liability, not revenue.
- * Gift cards are found by the hash of their code (the code itself is never
+ * Gift cards are found by the keyed hash of their code (the code itself is never
  * stored; last4 is kept for display). Store credit belongs to one customer.
  * balance is a projection of the append-only stored_value_entries, changed only
  * by guarded UPDATEs (never below zero, also under concurrent redemptions).
@@ -26,6 +26,10 @@ export enum StoredValueStatus {
 @Index('uq_stored_value_code', ['tenantId', 'codeHash'], {
   unique: true,
   where: '"codeHash" IS NOT NULL',
+})
+@Index('uq_stored_value_code_hmac', ['tenantId', 'codeHmac'], {
+  unique: true,
+  where: '"codeHmac" IS NOT NULL',
 })
 @Index('uq_store_credit_customer', ['tenantId', 'customerId'], {
   unique: true,
@@ -48,9 +52,16 @@ export class StoredValueAccount extends BaseEntityWithVersion {
   })
   accountType: StoredValueType;
 
-  // sha256 of the tenant id and the normalised gift card code
+  // Legacy: unkeyed sha256 of the tenant id and the normalised gift card code.
+  // Only on cards issued before the HMAC and not used since; cleared (and
+  // codeHmac written) the first time such a card is looked up.
   @Column({ type: 'varchar', length: 64, nullable: true })
   codeHash: string | null;
+
+  // HMAC-SHA256 (key GIFT_CARD_CODE_SECRET) of the tenant id and the
+  // normalised code: see stored-value/gift-card-code.ts
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  codeHmac: string | null;
 
   @Column({ type: 'varchar', length: 4, nullable: true })
   last4: string | null;

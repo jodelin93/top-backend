@@ -56,6 +56,12 @@ export const envSchema = Joi.object<Record<string, unknown>>({
   BCRYPT_ROUNDS: Joi.number().integer().min(10).max(15).default(10),
   // Signs offline capability leases held by tills (spec §19); required outside development/test
   OFFLINE_LEASE_SECRET: Joi.string().min(32).empty('').when('NODE_ENV', isProd),
+  // Key of the gift card code HMAC; required outside development/test. Never
+  // change it once cards are sold (they could no longer be found).
+  GIFT_CARD_CODE_SECRET: Joi.string()
+    .min(32)
+    .empty('')
+    .when('NODE_ENV', isProd),
   // First owner account created by `npm run seed`
   ADMIN_EMAIL: Joi.string().email().empty('').optional(),
   ADMIN_PASSWORD: Joi.string().min(8).empty('').optional(),

@@ -42,6 +42,12 @@ import {
   UpdateEmployeeDto,
 } from './employees.dto';
 import { containsPattern } from '../common/utils/like';
+import {
+  assertDateRange,
+  assertShiftLength,
+  storeTimezone,
+  todayIn,
+} from '../common/validation/date-rules';
 
 const can = (user: AuthUser, permission: string) =>
   user.permissions?.some((p) => p === permission) ?? false;
@@ -375,6 +381,11 @@ export class EmployeesService {
       return this.view(employee);
     }
     let membershipSuspended = false;
+    assertDateRange(
+      employee.hireDate,
+      dto.terminationDate?.slice(0, 10),
+      'The termination date is before the hire date',
+    );
     if (employee.userId) {
       const membership = await this.dataSource
         .getRepository(TenantMembership)
@@ -397,10 +408,10 @@ export class EmployeesService {
       }
     }
     const now = new Date();
-    const terminationDate = (dto.terminationDate ?? now.toISOString()).slice(
-      0,
-      10,
-    );
+    const terminationDate = (
+      dto.terminationDate ??
+      todayIn(await storeTimezone(this.dataSource.manager, tenantId))
+    ).slice(0, 10);
     await this.dataSource.transaction(async (manager) => {
       await manager
         .getRepository(Employee)
@@ -578,9 +589,7 @@ export class EmployeesService {
   ) {
     const clockIn = new Date(dto.clockIn);
     const clockOut = dto.clockOut ? new Date(dto.clockOut) : null;
-    if (clockOut && clockOut < clockIn) {
-      throw new BadRequestException('The clock-out is before the clock-in');
-    }
+    assertShiftLength(clockIn, clockOut);
     const scope = branchScope(actor);
     try {
       const record = await this.dataSource.transaction(async (manager) => {
@@ -674,6 +683,7 @@ export class EmployeesService {
         throw new ConflictException('This record is already clocked out');
       }
       const clockOut = new Date(dto.clockOut);
+      // No 24-hour cap here: closing a forgotten clock-in must stay possible
       if (clockOut < found.clockIn) {
         throw new BadRequestException('The clock-out is before the clock-in');
       }

@@ -23,12 +23,16 @@ import { requestContext } from '../common/context/request-context';
 import { paginate } from '../common/dto/pagination.dto';
 import { returnedRows } from '../sales/special-tenders';
 import { round2 } from '../sales/sale-calculator';
+import { ConfigService } from '@nestjs/config';
 import {
   formatGiftCardCode,
   generateGiftCardCode,
-  hashGiftCardCode,
+  getGiftCardCodeSecret,
+  hmacGiftCardCode,
+  INVALID_GIFT_CARD_CODE_MESSAGE,
   isValidGiftCardCode,
   last4Of,
+  legacyHashGiftCardCode,
 } from './gift-card-code';
 import { ListStoredValueQueryDto } from './stored-value.dto';
 import { ApprovalsService } from '../approvals/approvals.service';
@@ -121,7 +125,17 @@ export class StoredValueService {
     @Optional() private settingsService?: SettingsService,
     // Second-person approval of large manual credits (global ApprovalsModule)
     @Optional() private approvalsService?: ApprovalsService,
+    // GIFT_CARD_CODE_SECRET (falls back to process.env when not injected)
+    @Optional() private config?: ConfigService,
   ) {}
+
+  private codeSecret?: string;
+
+  /** Keyed hash (HMAC) of a gift card code: what new cards store */
+  codeHmac(tenantId: string, code: string): string {
+    this.codeSecret ??= getGiftCardCodeSecret(this.config);
+    return hmacGiftCardCode(this.codeSecret, tenantId, code);
+  }
 
   // ---------------------------------------------------------------------------
   // Movements
@@ -356,16 +370,22 @@ export class StoredValueService {
     const expiresAt = giftCardExpiry(new Date(), months);
     for (const card of input.cards) {
       if (card.code && !isValidGiftCardCode(card.code)) {
-        throw new BadRequestException(
-          'A gift card code has 8 to 32 letters or digits',
-        );
+        throw new BadRequestException(INVALID_GIFT_CARD_CODE_MESSAGE);
       }
       const code = card.code
         ? formatGiftCardCode(card.code)
         : generateGiftCardCode();
-      const codeHash = hashGiftCardCode(input.tenantId, code);
+      const codeHmac = this.codeHmac(input.tenantId, code);
+      // Unique per store under both schemes: a card issued before the HMAC
+      // (legacy hash, not upgraded yet) can't get a twin
       const taken = await repo.exists({
-        where: { tenantId: input.tenantId, codeHash },
+        where: [
+          { tenantId: input.tenantId, codeHmac },
+          {
+            tenantId: input.tenantId,
+            codeHash: legacyHashGiftCardCode(input.tenantId, code),
+          },
+        ],
       });
       if (taken) {
         throw new ConflictException(
@@ -376,7 +396,8 @@ export class StoredValueService {
         repo.create({
           tenantId: input.tenantId,
           accountType: StoredValueType.GIFT_CARD,
-          codeHash,
+          codeHmac,
+          codeHash: null,
           last4: last4Of(code),
           balance: 0,
           initialAmount: card.amount,
@@ -545,18 +566,38 @@ export class StoredValueService {
   // ---------------------------------------------------------------------------
   // Lookups and administration
 
+  /**
+   * The gift card with this code, by its HMAC, or by the legacy unkeyed hash
+   * for cards issued before GIFT_CARD_CODE_SECRET: such a card is upgraded on
+   * the spot (HMAC written, legacy hash cleared) with the caller's manager, so
+   * in the caller's transaction when there is one.
+   */
   async findGiftCardByCode(
     manager: EntityManager,
     tenantId: string,
     code: string,
   ): Promise<StoredValueAccount | null> {
-    return manager.findOne(StoredValueAccount, {
-      where: {
-        tenantId,
-        accountType: StoredValueType.GIFT_CARD,
-        codeHash: hashGiftCardCode(tenantId, code),
-      },
+    const codeHmac = this.codeHmac(tenantId, code);
+    const legacy = legacyHashGiftCardCode(tenantId, code);
+    const account = await manager.findOne(StoredValueAccount, {
+      where: [
+        { tenantId, accountType: StoredValueType.GIFT_CARD, codeHmac },
+        { tenantId, accountType: StoredValueType.GIFT_CARD, codeHash: legacy },
+      ],
     });
+    if (account && !account.codeHmac && account.codeHash === legacy) {
+      // Guarded: only the row still holding this legacy hash is changed
+      await manager.query(
+        `UPDATE stored_value_accounts
+            SET "codeHmac" = $1, "codeHash" = NULL
+          WHERE id = $2 AND "tenantId" = $3 AND "codeHash" = $4
+            AND "codeHmac" IS NULL`,
+        [codeHmac, account.id, tenantId, legacy],
+      );
+      account.codeHmac = codeHmac;
+      account.codeHash = null;
+    }
+    return account;
   }
 
   /** Balance check at the till: the card's balance, never its code */

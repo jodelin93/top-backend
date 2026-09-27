@@ -25,6 +25,10 @@ import {
   CreateSupplierInvoiceDto,
   SupplierDocumentsQueryDto,
 } from './purchasing.dto';
+import {
+  assertNotFutureDay,
+  storeTimezone,
+} from '../common/validation/date-rules';
 
 /** Amount allocated (payments + credits) per invoice */
 export async function allocatedByInvoice(
@@ -165,6 +169,11 @@ export class SupplierInvoicesService {
     }
     const type = dto.invoiceType ?? 'standard';
     const invoiceDate = dto.invoiceDate.slice(0, 10);
+    assertNotFutureDay(
+      invoiceDate,
+      await storeTimezone(this.dataSource.manager, tenantId),
+      'The invoice date cannot be in the future',
+    );
     const dueDate = (
       dto.dueDate ?? addDays(invoiceDate, supplier.paymentTermDays ?? 0)
     ).slice(0, 10);

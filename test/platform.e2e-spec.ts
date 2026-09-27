@@ -33,7 +33,10 @@ describe('Platform (e2e)', () => {
     body?: object,
     bearer?: string,
   ) => {
-    let req = request(app.getHttpServer())[method](`/api/v1${path}`);
+    // API-client mode: tokens in the body, bearer auth (see auth/session-cookie.ts)
+    let req = request(app.getHttpServer())
+      [method](`/api/v1${path}`)
+      .set('X-Auth-Mode', 'token');
     if (bearer) req = req.set('Authorization', `Bearer ${bearer}`);
     return body ? req.send(body) : req;
   };

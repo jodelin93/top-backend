@@ -20,6 +20,7 @@ import {
 import { IsQuantity } from '../common/dto/quantity.decorator';
 import { SaleStatus } from '../database/entities/sale.entity';
 import { ConflictCaseType } from '../database/entities/conflict-case.entity';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 // Upper bound of any money amount in a request
 const MAX_MONEY = 999_999_999;
@@ -143,6 +144,14 @@ export class CreateSaleDto extends QuoteSaleDto {
   @IsUUID() @IsOptional() deviceId?: string;
   @IsInt() @Min(0) @IsOptional() deviceSequence?: number;
 
+  // Offline sales only: the customer group discount (%) the till gave. Online
+  // it is ignored: the customer's group decides.
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  groupDiscountPercent?: number;
+
   // Held (or resumed) cart this sale completes
   @IsUUID() @IsOptional() heldSaleId?: string;
 
@@ -172,7 +181,7 @@ export class CancelSaleDto {
 
 export class ListSalesQueryDto {
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   @IsEnum(SaleStatus) @IsOptional() status?: SaleStatus;
   @IsUUID() @IsOptional() customerId?: string;
   @IsUUID() @IsOptional() registerId?: string;
@@ -197,6 +206,17 @@ export class CatalogQueryDto {
   @Max(500)
   @IsOptional()
   limit?: number;
+}
+
+/** Prices of cart items for a customer (group price list) at a register */
+export class PosPricesDto {
+  @IsUUID() registerId: string;
+  // Without a customer: the prices for everyone (e.g. the customer was removed)
+  @IsUUID() @IsOptional() customerId?: string;
+  @IsArray()
+  @ArrayMaxSize(500)
+  @IsUUID('all', { each: true })
+  variantIds: string[];
 }
 
 export class ListConflictCasesQueryDto {

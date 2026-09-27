@@ -50,7 +50,11 @@ export function apiFor(baseUrl: string, defaultToken: () => string | null) {
     body?: object,
     options: { token?: string | null; headers?: Record<string, string> } = {},
   ) => {
-    let req = request(baseUrl)[method](`/api/v1${path}`);
+    // API-client mode: the token comes back in the body (no cookie) and the
+    // header also satisfies the anti-CSRF check (auth/guards/csrf.guard.ts)
+    let req = request(baseUrl)
+      [method](`/api/v1${path}`)
+      .set('X-Auth-Mode', 'token');
     const bearer = options.token === undefined ? defaultToken() : options.token;
     if (bearer) req = req.set('Authorization', `Bearer ${bearer}`);
     for (const [k, v] of Object.entries(options.headers ?? {})) {

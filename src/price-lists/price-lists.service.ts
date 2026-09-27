@@ -1,7 +1,8 @@
 import { AuditService } from '../audit/audit.service';
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { DataSource, DeepPartial, In, Repository } from 'typeorm';
+import { assertValidityWindow } from '../common/validation/date-rules';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { TenantCrudService } from '../common/crud/tenant-crud.service';
 import { PriceList } from '../database/entities/price-list.entity';
@@ -27,6 +28,17 @@ export class PriceListsService extends TenantCrudService<PriceList> {
     private auditService: AuditService,
   ) {
     super(repository);
+  }
+
+  async create(tenantId: string, data: DeepPartial<PriceList>) {
+    assertValidityWindow(data);
+    return super.create(tenantId, data);
+  }
+
+  async update(tenantId: string, id: string, data: DeepPartial<PriceList>) {
+    const current = await this.findOne(tenantId, id);
+    assertValidityWindow(data, current);
+    return super.update(tenantId, id, data);
   }
 
   async getEntries(tenantId: string, priceListId: string) {

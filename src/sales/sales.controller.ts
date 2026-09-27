@@ -34,6 +34,7 @@ import {
   HeldSalesQueryDto,
   HoldSaleDto,
   ListSalesQueryDto,
+  PosPricesDto,
   QuoteSaleDto,
   VoidSaleDto,
 } from './sales.dto';
@@ -215,6 +216,18 @@ export class PosController {
   @RequireAnyPermission('pos.sell', 'estimates.manage')
   catalog(@CurrentTenant() tenantId: string, @Query() query: CatalogQueryDto) {
     return this.posService.getCatalog(tenantId, query);
+  }
+
+  /**
+   * Prices of the cart's items for a customer (their group's price list) and
+   * the group's discount: the till reprices the cart when a customer is chosen
+   * or removed. POST /pos/prices
+   */
+  @Post('prices')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermissions('pos.sell')
+  prices(@CurrentTenant() tenantId: string, @Body() dto: PosPricesDto) {
+    return this.posService.customerPrices(tenantId, dto);
   }
 
   /**

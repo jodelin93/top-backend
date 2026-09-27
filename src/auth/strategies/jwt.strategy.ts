@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ExtractJwt, Strategy } from 'passport-jwt';
+import { Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { User, UserStatus } from '../../database/entities/user.entity';
 import {
@@ -20,6 +20,7 @@ import { SessionsService } from '../../sessions/sessions.service';
 import { SettingsService } from '../../settings/settings.service';
 import { requiresMfaSetup } from '../mfa-policy';
 import { membershipBranchIds } from '../branch-scope';
+import { CookieRequest, extractSessionToken } from '../session-cookie';
 
 // Authenticated user as attached to the request, with the active tenant, role and permissions resolved
 export type AuthUser = User & {
@@ -48,7 +49,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private settingsService: SettingsService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      // The web app's HttpOnly session cookie first, else Authorization: Bearer
+      // (API clients, tests)
+      jwtFromRequest: (req: CookieRequest) => extractSessionToken(req),
       ignoreExpiration: false,
       secretOrKey: getJwtSecret(configService),
     });

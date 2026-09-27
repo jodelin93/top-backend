@@ -21,6 +21,7 @@ import {
   PriceListStatus,
   PriceListType,
 } from '../database/entities/price-list.entity';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 export class CreatePriceListDto {
   @IsString() @IsNotEmpty() @MaxLength(50) code: string;
@@ -30,7 +31,10 @@ export class CreatePriceListDto {
   @IsString() @Length(3, 3) currencyCode: string;
   @IsUUID() @IsOptional() branchId?: string | null;
   @IsDateString() @IsOptional() validFrom?: string | null;
-  @IsDateString() @IsOptional() validTo?: string | null;
+  @IsDateString()
+  @IsOnOrAfterField('validFrom')
+  @IsOptional()
+  validTo?: string | null;
   @IsInt() @IsOptional() priority?: number;
 }
 

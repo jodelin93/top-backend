@@ -15,6 +15,12 @@ import {
 import { Estimate, EstimateStatus } from '../database/entities/estimate.entity';
 import { EstimateItem } from '../database/entities/estimate-item.entity';
 import { Branch } from '../database/entities/branch.entity';
+import {
+  assertDateRange,
+  assertNotPastDay,
+  storeTimezone,
+  todayIn,
+} from '../common/validation/date-rules';
 import { Customer } from '../database/entities/customer.entity';
 import {
   ProductVariant,
@@ -52,7 +58,6 @@ const OPEN_STATUSES = [
 ];
 const DEFAULT_VALIDITY_DAYS = 30;
 
-const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (date: string, days: number) => {
   const d = new Date(`${date}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + days);
@@ -146,7 +151,18 @@ export class EstimatesService {
         tenantId,
         prefix: 'EST',
       });
-      const issueDate = (dto.issueDate ?? today()).slice(0, 10);
+      const timezone = await storeTimezone(manager, tenantId, dto.branchId);
+      const issueDate = (dto.issueDate ?? todayIn(timezone)).slice(0, 10);
+      assertNotPastDay(
+        dto.validUntil?.slice(0, 10),
+        timezone,
+        'The valid-until date cannot be in the past',
+      );
+      assertDateRange(
+        issueDate,
+        dto.validUntil?.slice(0, 10),
+        'The valid-until date is before the issue date',
+      );
       const estimate = manager.create(Estimate, {
         tenantId,
         estimateNumber,
@@ -197,7 +213,23 @@ export class EstimatesService {
         );
       }
       if (dto.issueDate) estimate.issueDate = dto.issueDate.slice(0, 10);
-      if (dto.validUntil) estimate.validUntil = dto.validUntil.slice(0, 10);
+      if (
+        dto.validUntil &&
+        dto.validUntil.slice(0, 10) !== estimate.validUntil
+      ) {
+        // A new validity date must not already be over
+        assertNotPastDay(
+          dto.validUntil.slice(0, 10),
+          await storeTimezone(manager, tenantId, estimate.branchId),
+          'The valid-until date cannot be in the past',
+        );
+        estimate.validUntil = dto.validUntil.slice(0, 10);
+      }
+      assertDateRange(
+        estimate.issueDate,
+        estimate.validUntil,
+        'The valid-until date is before the issue date',
+      );
       if (dto.notes !== undefined) estimate.notes = dto.notes;
       if (dto.terms !== undefined) estimate.terms = dto.terms;
       // Editing an accepted estimate sends it back for the customer's agreement
@@ -671,8 +703,11 @@ export class EstimatesService {
   }
 
   private isExpired(estimate: Pick<Estimate, 'validUntil' | 'status'>) {
+    // Valid through the whole last day, in every time zone: compared with
+    // today in the latest zone (UTC-12), so it never shows expired too early
     return (
-      OPEN_STATUSES.includes(estimate.status) && estimate.validUntil < today()
+      OPEN_STATUSES.includes(estimate.status) &&
+      estimate.validUntil < todayIn('Etc/GMT+12')
     );
   }
 

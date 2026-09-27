@@ -21,6 +21,7 @@ import { ShiftStatus } from '../database/entities/shift.entity';
 import { CashMovementType } from '../database/entities/cash-movement.entity';
 import { ShiftCorrectionType } from '../database/entities/shift-correction.entity';
 import { DrawerStatus } from '../database/entities/drawer.entity';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 export class DenominationCountInput {
   @IsNumber() @Min(0.01) value: number;
@@ -103,7 +104,7 @@ export class ListShiftsQueryDto {
   @IsUUID() @IsOptional() registerId?: string;
   @IsUUID() @IsOptional() userId?: string;
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   // Only closed shifts whose variance is above the tolerance
   @IsIn(['true', 'false']) @IsOptional() varianceOnly?: 'true' | 'false';
   @Type(() => Number) @IsInt() @Min(1) @IsOptional() page?: number;

@@ -10,6 +10,7 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 @ValidatorConstraint({ name: 'timeZone' })
 class IsTimeZone implements ValidatorConstraintInterface {
@@ -32,7 +33,7 @@ class IsTimeZone implements ValidatorConstraintInterface {
 
 export class ReportQueryDto {
   @IsDateString() from: string;
-  @IsDateString() to: string;
+  @IsDateString() @IsOnOrAfterField('from') to: string;
   // Used to group sales by local calendar day, e.g. America/New_York
   @IsString()
   @MaxLength(64)
@@ -46,7 +47,7 @@ export class ReportQueryDto {
 // Tabular reports: snapshot reports (stock) don't need a date range
 export class RunReportQueryDto {
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   @IsString()
   @MaxLength(64)
   @Validate(IsTimeZone)

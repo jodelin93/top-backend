@@ -1,6 +1,11 @@
 import { LoyaltyService } from '../loyalty/loyalty.service';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { DataSource, In } from 'typeorm';
+import { Customer } from '../database/entities/customer.entity';
 import { assertBranchAccess, branchWhere } from '../auth/branch-scope';
 import {
   ProductVariant,
@@ -16,7 +21,7 @@ import {
 import { Category } from '../database/entities/category.entity';
 import { SettingsService } from '../settings/settings.service';
 import { PricingService } from '../price-lists/pricing.service';
-import { CatalogQueryDto } from './sales.dto';
+import { CatalogQueryDto, PosPricesDto } from './sales.dto';
 import { TaxResolverService } from './tax-resolver.service';
 import { sellingStaff, StaffMember } from './staff';
 import {
@@ -353,6 +358,47 @@ export class PosService {
         pluCode: variant.pluCode ?? null,
       };
     });
+  }
+
+  /**
+   * Prices of variants for a customer at a register: their group's price list
+   * applies automatically (as in a sale), and the group's discount is returned
+   * for the till to show and apply. Without a customer, the prices for everyone.
+   */
+  async customerPrices(tenantId: string, dto: PosPricesDto) {
+    const register = await this.dataSource
+      .getRepository(Register)
+      .findOne({ where: { id: dto.registerId, tenantId } });
+    if (!register) throw new NotFoundException('Register not found');
+    assertBranchAccess(null, register.branchId, 'Register not found');
+    let groupId: string | null = null;
+    if (dto.customerId) {
+      const customer = await this.dataSource.getRepository(Customer).findOne({
+        where: { id: dto.customerId, tenantId },
+        select: { id: true, groupId: true },
+      });
+      if (!customer) throw new NotFoundException('Customer not found');
+      groupId = customer.groupId;
+    }
+    const group = await this.pricingService.customerGroupPricing(
+      tenantId,
+      groupId,
+    );
+    const ids = [...new Set(dto.variantIds)];
+    const variants = ids.length
+      ? await this.dataSource.getRepository(ProductVariant).find({
+          where: { tenantId, id: In(ids) },
+          select: { id: true, price: true },
+        })
+      : [];
+    const prices = await this.pricingService.resolvePrices(tenantId, variants, {
+      branchId: register.branchId,
+      priceListId: group?.priceListId ?? undefined,
+    });
+    return {
+      customerGroup: group,
+      prices: Object.fromEntries(prices),
+    };
   }
 
   /**

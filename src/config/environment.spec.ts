@@ -31,6 +31,20 @@ describe('env validation in strict environments', () => {
     }
   });
 
+  it('requires GIFT_CARD_CODE_SECRET in strict environments', () => {
+    const complete = {
+      ...base,
+      NODE_ENV: 'production',
+      JWT_SECRET: 'j'.repeat(48),
+      OFFLINE_LEASE_SECRET: 'o'.repeat(48),
+      CORS_ORIGINS: 'https://app.example.com',
+    };
+    expect(() => validateEnv(complete)).toThrow(/GIFT_CARD_CODE_SECRET/);
+    expect(() =>
+      validateEnv({ ...complete, GIFT_CARD_CODE_SECRET: 'g'.repeat(48) }),
+    ).not.toThrow();
+  });
+
   it('does not require them in development/test', () => {
     expect(() => validateEnv({ ...base, NODE_ENV: 'test' })).not.toThrow();
     expect(() =>

@@ -22,6 +22,7 @@ import { CurrentTenant } from '../auth/decorators/current-tenant.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequireAnyPermission } from '../auth/decorators/permissions.decorator';
 import { Public } from '../auth/decorators/public.decorator';
+import { SkipCsrf } from '../auth/decorators/skip-csrf.decorator';
 import type { AuthUser } from '../auth/strategies/jwt.strategy';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -203,6 +204,8 @@ export class SystemEventsController {
  * clears it. Disabled (404) while BACKUP_REPORT_TOKEN is unset.
  */
 @Public()
+// Called by scripts/backup-db.sh with a shared secret, never by a browser
+@SkipCsrf()
 @ApiTags('System events')
 @Controller('platform')
 export class BackupReportController {

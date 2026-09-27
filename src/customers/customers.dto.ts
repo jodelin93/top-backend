@@ -22,6 +22,10 @@ import {
   CustomerType,
 } from '../database/entities/customer.entity';
 import { MERGE_CHOICE_FIELDS } from './customer-merge';
+import {
+  IsNotBeforeDay,
+  IsNotFutureDate,
+} from '../common/validation/date-rules';
 
 export class CreateCustomerDto {
   // Generated (CUST-000001) when omitted
@@ -33,7 +37,11 @@ export class CreateCustomerDto {
   @IsEmail() @IsOptional() @MaxLength(255) email?: string | null;
   @IsString() @IsOptional() @MaxLength(50) phone?: string | null;
   @IsString() @IsOptional() @MaxLength(100) taxNumber?: string | null;
-  @IsDateString() @IsOptional() dateOfBirth?: string | null;
+  @IsDateString()
+  @IsNotFutureDate()
+  @IsNotBeforeDay('1900-01-01')
+  @IsOptional()
+  dateOfBirth?: string | null;
   @IsNumber() @Min(0) @IsOptional() creditLimit?: number;
   // Days to pay a charge on account (null: the group's terms, else 30)
   @IsInt() @Min(0) @Max(3650) @IsOptional() paymentTermDays?: number | null;

@@ -237,6 +237,14 @@ describe('SalesService', () => {
       Promise.resolve(new Map(variants.map((v) => [v.id, 10]))),
     ),
     needsPriceOverride: jest.fn(() => Promise.resolve(false)),
+    customerGroupPricing: jest.fn(
+      (): Promise<{
+        id: string;
+        name: string;
+        priceListId: string | null;
+        discountPercent: number;
+      } | null> => Promise.resolve(null),
+    ),
   };
   const estimatesService = {
     quotedLines: jest.fn(),
@@ -2576,6 +2584,188 @@ describe('SalesService', () => {
       await service.create(TENANT, CASHIER, wholesale(12));
       expect(savedSale().total).toBe(12);
       expect(pricingService.resolvePrices).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('customer group pricing', () => {
+    const GROUP_LIST = '99999999-3333-4333-8444-555555555555';
+    const CUSTOMER_ID = '11111111-2222-4333-8444-555555555555';
+    const casesSaved = () =>
+      (manager.save.mock.calls as [Record<string, unknown>][])
+        .map(([row]) => row)
+        .filter((row) => !Array.isArray(row) && 'type' in row);
+    const group = (discountPercent: number, priceListId: string | null) =>
+      pricingService.customerGroupPricing.mockResolvedValue({
+        id: 'grp-1',
+        name: 'Trade',
+        priceListId,
+        discountPercent,
+      });
+    const answerQueries = () =>
+      manager.query.mockImplementation(((sql: string) =>
+        Promise.resolve(
+          sql.includes('document_sequences')
+            ? [[{ lastValue: '42' }], 1]
+            : sql.includes('notEarning')
+              ? [{ notEarning: '0' }]
+              : [],
+        )) as never);
+    beforeEach(() => {
+      answerQueries();
+      repo(Customer).findOne.mockResolvedValue({
+        id: CUSTOMER_ID,
+        tenantId: TENANT,
+        status: 'active',
+        groupId: 'grp-1',
+      });
+      // The group's list prices the coffee at 6.00, the catalog at 10.00
+      pricingService.resolvePrices.mockImplementation(((
+        _tenantId: string,
+        variants: { id: string }[],
+        context: { priceListId?: string },
+      ) =>
+        Promise.resolve(
+          new Map(
+            variants.map((v) => [
+              v.id,
+              context.priceListId === GROUP_LIST ? 6 : 10,
+            ]),
+          ),
+        )) as never);
+    });
+    afterEach(() => {
+      pricingService.customerGroupPricing.mockResolvedValue(null);
+      pricingService.resolvePrices.mockImplementation(
+        (_tenantId: string, variants: { id: string }[]) =>
+          Promise.resolve(new Map(variants.map((v) => [v.id, 10]))),
+      );
+    });
+    const quoteFor = (user: AuthUser, extra: Partial<CreateSaleDto> = {}) =>
+      service.quote(TENANT, user, {
+        registerId: register.id,
+        customerId: CUSTOMER_ID,
+        items: [{ variantId: variant.id, quantity: 2 }],
+        ...extra,
+      });
+
+    it("quotes at the group's price list, with no price override", async () => {
+      group(0, GROUP_LIST);
+      const quote = await quoteFor(CASHIER);
+      expect(pricingService.resolvePrices).toHaveBeenCalledWith(
+        TENANT,
+        expect.anything(),
+        expect.objectContaining({ priceListId: GROUP_LIST }),
+      );
+      expect(quote.lines[0]).toMatchObject({ unitPrice: 6, catalogPrice: 6 });
+      expect(quote.total).toBe(12);
+      expect(quote.overrides).toEqual([]);
+      expect(quote.groupDiscount).toBeNull();
+      expect(quote.customerGroup).toMatchObject({ priceListId: GROUP_LIST });
+    });
+
+    it('takes the group discount off without any approval, even above the store limit', async () => {
+      // 30% is above the store's 20% limit for manual discounts
+      group(30, null);
+      const noDiscountRights = {
+        ...CASHIER,
+        permissions: ['pos.sell'],
+      } as unknown as AuthUser;
+      const quote = await quoteFor(noDiscountRights);
+      expect(quote.total).toBe(14);
+      expect(quote.discountAmount).toBe(6);
+      expect(quote.overrides).toEqual([]);
+      expect(quote.groupDiscount).toEqual({
+        groupId: 'grp-1',
+        name: 'Trade',
+        percent: 30,
+        amount: 6,
+      });
+    });
+
+    it('applies both, and records the group discount on the sale', async () => {
+      group(10, GROUP_LIST);
+      // 12.00 at the group's list, less 10%
+      await service.create(
+        TENANT,
+        CASHIER,
+        saleDto([{ paymentMethodId: 'cash', amount: 10.8 }], {
+          customerId: CUSTOMER_ID,
+        }),
+      );
+      expect(savedSale().total).toBe(10.8);
+      expect(
+        (savedSale() as unknown as { metadata: Record<string, unknown> })
+          .metadata.groupDiscount,
+      ).toEqual({ groupId: 'grp-1', name: 'Trade', percent: 10, amount: 1.2 });
+      expect(audit.record).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'sale.discount_override' }),
+        manager,
+      );
+    });
+
+    it('still needs approval for a manual discount on top, measured alone', async () => {
+      group(10, null);
+      const noDiscountRights = {
+        ...CASHIER,
+        permissions: ['pos.sell'],
+      } as unknown as AuthUser;
+      await expect(
+        quoteFor(noDiscountRights, {
+          items: [{ variantId: variant.id, quantity: 2, discountPercent: 5 }],
+        }),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          missingPermissions: ['pos.discount'],
+        }) as unknown,
+      });
+    });
+
+    it('ignores a group discount claimed by an online request', async () => {
+      group(0, null);
+      const quote = await service.create(
+        TENANT,
+        CASHIER,
+        saleDto([{ paymentMethodId: 'cash', amount: 20 }], {
+          customerId: CUSTOMER_ID,
+          groupDiscountPercent: 50,
+        }),
+      );
+      expect(quote).toBeDefined();
+      expect(savedSale().total).toBe(20);
+    });
+
+    it("keeps an offline sale's group discount; more than the group's is flagged", async () => {
+      group(10, null);
+      const offlineSale = (groupDiscountPercent: number, amount: number) =>
+        service.create(
+          TENANT,
+          CASHIER,
+          saleDto([{ paymentMethodId: 'cash', amount }], {
+            customerId: CUSTOMER_ID,
+            items: [{ variantId: variant.id, quantity: 2, unitPrice: 10 }],
+            groupDiscountPercent,
+            offlineCapturedAt: '2026-09-01T10:00:00.000Z',
+          }),
+          undefined,
+          OFFLINE(),
+        );
+      await offlineSale(10, 18);
+      expect(savedSale().total).toBe(18);
+      expect(casesSaved()).toEqual([]);
+
+      jest.clearAllMocks();
+      answerQueries();
+      group(10, null);
+      await offlineSale(40, 12);
+      expect(savedSale().total).toBe(12);
+      expect(casesSaved()).toEqual([
+        expect.objectContaining({
+          type: 'offline_price',
+          details: expect.objectContaining({
+            missingPermissions: ['pos.discount.override'],
+          }) as unknown,
+        }),
+      ]);
     });
   });
 

@@ -46,6 +46,11 @@ import {
 } from './expenses.dto';
 import { containsPattern } from '../common/utils/like';
 import { ApprovalsService } from '../approvals/approvals.service';
+import {
+  assertNotFutureDay,
+  storeTimezone,
+  todayIn,
+} from '../common/validation/date-rules';
 
 const can = (user: AuthUser, permission: string) =>
   user.permissions?.some((p) => p === permission) ?? false;
@@ -196,15 +201,23 @@ export class ExpensesService {
         tenantId,
         prefix: 'EXP',
       });
+      const timezone = await this.expenseTimezone(
+        manager,
+        tenantId,
+        dto.registerId,
+      );
+      const expenseDate = (dto.expenseDate ?? todayIn(timezone)).slice(0, 10);
+      assertNotFutureDay(
+        expenseDate,
+        timezone,
+        'The expense date cannot be in the future',
+      );
       const repo = manager.getRepository(Expense);
       const expense = await repo.save(
         repo.create({
           tenantId,
           expenseNumber,
-          expenseDate: (dto.expenseDate ?? new Date().toISOString()).slice(
-            0,
-            10,
-          ),
+          expenseDate,
           categoryId: dto.categoryId ?? null,
           amount: round2(dto.amount),
           currencyCode,
@@ -264,7 +277,14 @@ export class ExpensesService {
         expense.receiptReference = receiptReference?.trim() || null;
       }
       if (notes !== undefined) expense.notes = notes?.trim() || null;
-      if (dto.expenseDate) expense.expenseDate = dto.expenseDate.slice(0, 10);
+      if (dto.expenseDate) {
+        assertNotFutureDay(
+          dto.expenseDate.slice(0, 10),
+          await this.expenseTimezone(manager, tenantId, expense.registerId),
+          'The expense date cannot be in the future',
+        );
+        expense.expenseDate = dto.expenseDate.slice(0, 10);
+      }
       // Editing a rejected expense puts it back into draft
       if (expense.status === ExpenseStatus.REJECTED) {
         expense.status = ExpenseStatus.DRAFT;
@@ -617,6 +637,21 @@ export class ExpensesService {
     if (!category.isActive) {
       throw new BadRequestException('This expense category is inactive');
     }
+  }
+
+  /** Time zone of the expense's branch (its register's), else the store's */
+  private async expenseTimezone(
+    manager: EntityManager,
+    tenantId: string,
+    registerId?: string | null,
+  ): Promise<string> {
+    const register = registerId
+      ? await manager.getRepository(Register).findOne({
+          where: { id: registerId, tenantId },
+          select: { id: true, branchId: true },
+        })
+      : null;
+    return storeTimezone(manager, tenantId, register?.branchId);
   }
 
   private async assertRegister(tenantId: string, registerId?: string | null) {

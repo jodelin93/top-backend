@@ -6,6 +6,7 @@
  * Order of operations per line:
  *   subtotal = unitPrice × quantity
  *   − manual line discount (%)
+ *   − customer group discount (%, on what is left)
  *   − product/category discount code
  *   − share of cart-level discounts (allocated in proportion to line value)
  *   = net; tax is computed on net (extracted from it when prices include tax)
@@ -65,6 +66,9 @@ export interface CalcOptions {
   pricesIncludeTax: boolean;
   discount?: CalcDiscount | null;
   cartDiscount?: CalcManualCartDiscount | null;
+  // Discount of the customer's group, 0–100: taken off every line after its
+  // manual discount (configured by management, not a cashier's discount)
+  groupDiscountPercent?: number | null;
 }
 
 export interface CalcLineResult extends CalcLineInput {
@@ -82,6 +86,8 @@ export interface CalcResult {
   total: number;
   // Why a discount code gave nothing (e.g. minimum not met), if applicable
   discountMessage?: string;
+  // Part of discountAmount that is the customer group discount (only when > 0)
+  groupDiscountAmount?: number;
 }
 
 /**
@@ -183,6 +189,20 @@ export function calculateSale(
 
   const grossSubtotal = lines.reduce((sum, l) => sum + l.subtotal, 0);
   let discountMessage: string | undefined;
+
+  // ---- Customer group discount ----
+  const groupPct = Math.min(
+    Math.max(options.groupDiscountPercent ?? 0, 0),
+    100,
+  );
+  let groupCents = 0;
+  if (groupPct > 0) {
+    for (const line of lines) {
+      const part = percentOf(line.subtotal - line.discount, groupPct);
+      line.discount += part;
+      groupCents += part;
+    }
+  }
 
   // ---- Discount code ----
   const discount = options.discount;
@@ -296,5 +316,6 @@ export function calculateSale(
     taxAmount: sum('taxAmount'),
     total: sum('total'),
     discountMessage,
+    ...(groupCents > 0 ? { groupDiscountAmount: fromCents(groupCents) } : {}),
   };
 }

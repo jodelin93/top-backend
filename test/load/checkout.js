@@ -56,6 +56,8 @@ export const options = {
 const json = (token) => ({
   headers: {
     'Content-Type': 'application/json',
+    // API-client mode: token in the login body, bearer auth, CSRF header check satisfied
+    'X-Auth-Mode': 'token',
     ...(token && { Authorization: `Bearer ${token}` }),
   },
 });

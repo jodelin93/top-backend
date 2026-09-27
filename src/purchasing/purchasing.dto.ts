@@ -25,6 +25,10 @@ import {
 import { IsQuantity } from '../common/dto/quantity.decorator';
 import { SupplierStatus } from '../database/entities/supplier.entity';
 import { PurchaseOrderStatus } from '../database/entities/purchase-order.entity';
+import {
+  IsNotFutureDate,
+  IsOnOrAfterField,
+} from '../common/validation/date-rules';
 
 const upper = ({ value }: { value: unknown }) =>
   typeof value === 'string' ? value.trim().toUpperCase() : value;
@@ -181,6 +185,7 @@ export class SavePurchaseOrderDto {
   @ValidateIf((_, v) => v !== null)
   @IsDateString()
   @IsOptional()
+  // Not in the past: checked by the service when the date is set or changed
   expectedDeliveryDate?: string | null;
 
   @IsNumber({ maxDecimalPlaces: 2 }) @IsOptional() @Min(0) taxAmount?: number;
@@ -328,9 +333,14 @@ export class CreateSupplierInvoiceDto {
   @IsOptional()
   invoiceType?: (typeof SUPPLIER_INVOICE_TYPES)[number];
   @IsUUID() @IsOptional() purchaseOrderId?: string;
-  @IsDateString() invoiceDate: string;
+  @IsDateString() @IsNotFutureDate() invoiceDate: string;
   // Defaults to the invoice date + the supplier's payment terms
-  @IsDateString() @IsOptional() dueDate?: string;
+  @IsDateString()
+  @IsOnOrAfterField('invoiceDate', {
+    message: 'The due date cannot be before the invoice date',
+  })
+  @IsOptional()
+  dueDate?: string;
   @IsString() @IsOptional() @MaxLength(500) notes?: string;
   // Opening balance only: the amount owed when starting with the system
   @IsNumber({ maxDecimalPlaces: 2 }) @IsOptional() @Min(0.01) amount?: number;
@@ -352,7 +362,7 @@ export class VoidDto {
 export class CreateSupplierCreditDto {
   @IsUUID() supplierId: string;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
-  @IsDateString() @IsOptional() creditDate?: string;
+  @IsDateString() @IsNotFutureDate() @IsOptional() creditDate?: string;
   // Supplier's credit note number
   @IsString() @IsOptional() @MaxLength(100) reference?: string;
   @IsString() @MinLength(1) @MaxLength(500) reason: string;
@@ -386,7 +396,7 @@ export class CreateSupplierPaymentDto {
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
   @IsIn(SUPPLIER_PAYMENT_METHODS)
   method: (typeof SUPPLIER_PAYMENT_METHODS)[number];
-  @IsDateString() @IsOptional() paymentDate?: string;
+  @IsDateString() @IsNotFutureDate() @IsOptional() paymentDate?: string;
   @IsString() @IsOptional() @MaxLength(100) reference?: string;
   @IsString() @IsOptional() @MaxLength(500) notes?: string;
 
@@ -406,7 +416,7 @@ export class AgingQueryDto {
 
 export class StatementQueryDto {
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
 }
 
 // ---- Reorder suggestions ----

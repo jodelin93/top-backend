@@ -82,9 +82,13 @@ async function bootstrap() {
     .filter(Boolean);
   app.enableCors({
     origin: corsOrigins?.length ? corsOrigins : ['http://localhost:3001'],
-    // No credentials: the API authenticates with bearer tokens, never cookies,
-    // so browsers must not attach cookies / HTTP auth to cross-origin calls.
-    credentials: false,
+    // Credentials: the web app's session is an HttpOnly, SameSite=Strict cookie
+    // (auth/session-cookie.ts). Same-origin setups (NEXT_PUBLIC_API_URL=/api/v1
+    // through the Next.js rewrite) don't need CORS at all; a separate API origin
+    // (https://api.example.com) must be same-site with the app and listed here
+    // exactly. Unsafe requests also need the X-Requested-With header (CsrfGuard),
+    // which only the origins above may send cross-origin (preflight).
+    credentials: true,
     // Idempotent-Replayed: a retried command got its stored response (common/idempotency)
     exposedHeaders: [REQUEST_ID_HEADER, 'Idempotent-Replayed'],
   });

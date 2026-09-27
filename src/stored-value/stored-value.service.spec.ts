@@ -15,7 +15,8 @@ import { StoredValueEntryType } from '../database/entities/stored-value-entry.en
 import { giftCardExpiry, StoredValueService } from './stored-value.service';
 import { GiftCardExpiryService } from './gift-card-expiry.service';
 import type { SettingsService } from '../settings/settings.service';
-import { hashGiftCardCode } from './gift-card-code';
+import { ConfigService } from '@nestjs/config';
+import { hmacGiftCardCode, legacyHashGiftCardCode } from './gift-card-code';
 import type { ApprovalsService } from '../approvals/approvals.service';
 import { SECOND_PERSON_THRESHOLD } from '../customers/credit/second-person';
 
@@ -225,11 +226,148 @@ describe('StoredValueService', () => {
       last4: '6789',
       status: StoredValueStatus.PENDING,
     });
-    expect(saved[0].codeHash).toBe(
-      hashGiftCardCode(TENANT, 'ABCD-EFGH-2345-6789'),
+    expect(saved[0].codeHmac).toBe(
+      service.codeHmac(TENANT, 'ABCD-EFGH-2345-6789'),
     );
+    // New cards never store the legacy unkeyed hash
+    expect(saved[0].codeHash).toBeNull();
     expect(JSON.stringify(saved[0])).not.toContain('ABCDEFGH23456789');
     expect(JSON.stringify(saved[0])).not.toContain('ABCD-EFGH');
+  });
+
+  describe('gift card code HMAC', () => {
+    const SECRET = 'gift-card-test-secret-'.padEnd(48, 'x');
+    const keyed = new StoredValueService(
+      {} as DataSource,
+      audit as unknown as AuditService,
+      outbox as unknown as OutboxService,
+      undefined,
+      undefined,
+      new ConfigService({ GIFT_CARD_CODE_SECRET: SECRET, NODE_ENV: 'test' }),
+    );
+    const CODE = 'ABCD-EFGH-2345-6789';
+
+    it('keys the hash with GIFT_CARD_CODE_SECRET', () => {
+      expect(keyed.codeHmac(TENANT, CODE)).toBe(
+        hmacGiftCardCode(SECRET, TENANT, CODE),
+      );
+    });
+
+    it('refuses short or digits-only pre-printed codes', async () => {
+      const manager = {
+        getRepository: () => ({ exists: jest.fn() }),
+      } as unknown as EntityManager;
+      for (const code of ['12345678', '1234-5678-9012-3456', 'ABCD-1234']) {
+        await expect(
+          keyed.createSaleGiftCards(manager, {
+            tenantId: TENANT,
+            saleId: 'sale-1',
+            currencyCode: 'USD',
+            activate: false,
+            cards: [{ amount: 10, code, saleItemId: null }],
+          }),
+        ).rejects.toThrow(/12 to 32 characters/);
+      }
+    });
+
+    it('refuses a code already used under either hash (unique per store)', async () => {
+      const exists = jest.fn(() => Promise.resolve(true));
+      const manager = {
+        getRepository: () => ({ exists }),
+      } as unknown as EntityManager;
+      await expect(
+        keyed.createSaleGiftCards(manager, {
+          tenantId: TENANT,
+          saleId: 'sale-1',
+          currencyCode: 'USD',
+          activate: false,
+          cards: [{ amount: 10, code: CODE, saleItemId: null }],
+        }),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(exists).toHaveBeenCalledWith({
+        where: [
+          {
+            tenantId: TENANT,
+            codeHmac: hmacGiftCardCode(SECRET, TENANT, CODE),
+          },
+          { tenantId: TENANT, codeHash: legacyHashGiftCardCode(TENANT, CODE) },
+        ],
+      });
+    });
+
+    it('finds a card by its HMAC without touching it', async () => {
+      const account = {
+        id: 'acc-1',
+        codeHmac: hmacGiftCardCode(SECRET, TENANT, CODE),
+        codeHash: null,
+      };
+      const manager = {
+        findOne: jest.fn(() => Promise.resolve(account)),
+        query: jest.fn(),
+      };
+      const found = await keyed.findGiftCardByCode(
+        manager as unknown as EntityManager,
+        TENANT,
+        'abcd efgh 2345 6789',
+      );
+      expect(found).toBe(account);
+      expect(manager.query).not.toHaveBeenCalled();
+      const where = (
+        manager.findOne.mock.calls[0] as unknown as [
+          unknown,
+          { where: Record<string, unknown>[] },
+        ]
+      )[1].where;
+      expect(where).toEqual([
+        expect.objectContaining({
+          tenantId: TENANT,
+          codeHmac: account.codeHmac,
+        }),
+        expect.objectContaining({
+          tenantId: TENANT,
+          codeHash: legacyHashGiftCardCode(TENANT, CODE),
+        }),
+      ]);
+    });
+
+    it("upgrades a legacy card on lookup, with the caller's manager", async () => {
+      const legacy = legacyHashGiftCardCode(TENANT, CODE);
+      const account = { id: 'acc-old', codeHmac: null, codeHash: legacy };
+      const manager = {
+        findOne: jest.fn(() => Promise.resolve(account)),
+        query: jest.fn(() => Promise.resolve([])),
+      };
+      const found = await keyed.findGiftCardByCode(
+        manager as unknown as EntityManager,
+        TENANT,
+        CODE,
+      );
+      const hmac = hmacGiftCardCode(SECRET, TENANT, CODE);
+      expect(manager.query).toHaveBeenCalledTimes(1);
+      const [sql, params] = manager.query.mock.calls[0] as unknown as [
+        string,
+        unknown[],
+      ];
+      expect(sql).toMatch(/SET "codeHmac" = \$1, "codeHash" = NULL/);
+      expect(sql).toMatch(/"codeHash" = \$4/);
+      expect(params).toEqual([hmac, 'acc-old', TENANT, legacy]);
+      expect(found).toMatchObject({ codeHmac: hmac, codeHash: null });
+    });
+
+    it('finds nothing for an unknown code', async () => {
+      const manager = {
+        findOne: jest.fn(() => Promise.resolve(null)),
+        query: jest.fn(),
+      };
+      await expect(
+        keyed.findGiftCardByCode(
+          manager as unknown as EntityManager,
+          TENANT,
+          CODE,
+        ),
+      ).resolves.toBeNull();
+      expect(manager.query).not.toHaveBeenCalled();
+    });
   });
 
   it('gives back what a voided sale spent, net of refunds already made', async () => {

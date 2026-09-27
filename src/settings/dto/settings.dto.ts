@@ -40,6 +40,7 @@ import {
   LocationStockStatus,
   LocationType,
 } from '../../database/entities/inventory-location.entity';
+import { IsNotPastDate } from '../../common/validation/date-rules';
 
 // Empty, an https URL, or http on localhost (local development storage)
 const LOGO_URL =
@@ -222,7 +223,7 @@ export class UpdateStoreSettingsDto {
   @IsInt() @IsOptional() @Min(0) @Max(3) weightedBarcodeValueDecimals?: number;
   // ---- Versioning ----
   // Future date: schedule the change instead of applying it now
-  @IsDateString() @IsOptional() effectiveFrom?: string;
+  @IsDateString() @IsNotPastDate() @IsOptional() effectiveFrom?: string;
   // Shown in the settings history
   @IsString() @IsOptional() @MaxLength(255) note?: string;
 }

@@ -67,6 +67,24 @@ import {
   UnplannedReceiptDto,
 } from './purchasing.dto';
 import { containsPattern } from '../common/utils/like';
+import {
+  compareDates,
+  isNotPastAnywhere,
+} from '../common/validation/date-rules';
+
+/** A new or changed expected delivery date is not before today */
+function assertExpectedDelivery(
+  value: string | null | undefined,
+  current: Date | string | null | undefined,
+): void {
+  if (!value) return;
+  if (current && compareDates(value.slice(0, 10), current) === 0) return;
+  if (!isNotPastAnywhere(value.slice(0, 10))) {
+    throw new BadRequestException(
+      'The expected delivery date cannot be in the past',
+    );
+  }
+}
 
 // Display name of a variant: "Product" or "Product – Variant"
 export function variantDisplayName(
@@ -219,6 +237,7 @@ export class PurchaseOrdersService {
         dto.taxAmount,
         dto.shippingCost,
       );
+      assertExpectedDelivery(dto.expectedDeliveryDate, null);
       const po = await manager.save(
         manager.create(PurchaseOrder, {
           tenantId,
@@ -1376,6 +1395,7 @@ export class PurchaseOrdersService {
     dto: SavePurchaseOrderDto,
     totals: ReturnType<typeof computeOrderTotals>,
   ) {
+    assertExpectedDelivery(dto.expectedDeliveryDate, po.expectedDeliveryDate);
     Object.assign(po, {
       expectedDeliveryDate: dto.expectedDeliveryDate
         ? new Date(dto.expectedDeliveryDate)

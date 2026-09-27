@@ -6,9 +6,9 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { JwtPayload } from '../auth.service';
+import { CookieRequest, extractMfaToken } from '../session-cookie';
 
-interface MfaRequest {
-  headers: { authorization?: string };
+interface MfaRequest extends CookieRequest {
   user?: JwtPayload;
 }
 
@@ -18,7 +18,8 @@ export class MfaGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<MfaRequest>();
-    const token = this.extractTokenFromHeader(request);
+    // The HttpOnly pos_mfa cookie (web app), else Authorization: Bearer
+    const token = extractMfaToken(request);
 
     if (!token) {
       throw new UnauthorizedException('Token not found');
@@ -38,10 +39,5 @@ export class MfaGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException('Invalid token');
     }
-  }
-
-  private extractTokenFromHeader(request: MfaRequest): string | undefined {
-    const [type, token] = request.headers.authorization?.split(' ') ?? [];
-    return type === 'Bearer' ? token : undefined;
   }
 }

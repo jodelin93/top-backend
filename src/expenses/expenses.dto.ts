@@ -20,6 +20,10 @@ import {
   ExpensePaymentMethod,
   ExpenseStatus,
 } from '../database/entities/expense.entity';
+import {
+  IsNotFutureDate,
+  IsOnOrAfterField,
+} from '../common/validation/date-rules';
 
 export class CreateExpenseCategoryDto {
   @IsString() @Matches(/^[A-Za-z0-9_-]{1,50}$/) code: string;
@@ -41,7 +45,7 @@ export class UpdateExpenseCategoryDto {
 
 export class CreateExpenseDto {
   // YYYY-MM-DD, defaults to today
-  @IsDateString() @IsOptional() expenseDate?: string;
+  @IsDateString() @IsNotFutureDate() @IsOptional() expenseDate?: string;
   @IsUUID() @IsOptional() categoryId?: string;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
   @IsString() @MinLength(2) @MaxLength(500) description: string;
@@ -58,7 +62,7 @@ export class CreateExpenseDto {
 }
 
 export class UpdateExpenseDto {
-  @IsDateString() @IsOptional() expenseDate?: string;
+  @IsDateString() @IsNotFutureDate() @IsOptional() expenseDate?: string;
   @ValidateIf((_, v) => v !== null)
   @IsUUID()
   @IsOptional()
@@ -108,7 +112,7 @@ export class ListExpensesQueryDto {
   @IsOptional()
   paymentMethod?: ExpensePaymentMethod;
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOptional() to?: string;
+  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
   @IsString() @MaxLength(100) @IsOptional() search?: string;
   @Type(() => Number) @IsInt() @Min(1) @IsOptional() page?: number;
   @Type(() => Number) @IsInt() @Min(1) @Max(100) @IsOptional() limit?: number;

@@ -13,6 +13,16 @@ import { CustomerGroup } from '../database/entities/customer-group.entity';
 // Lists that apply to every sale on their own (the others must be chosen)
 const AUTOMATIC_TYPES = [PriceListType.STANDARD, PriceListType.PROMOTIONAL];
 
+/** What a customer's group changes at the till: its price list and discount */
+export interface CustomerGroupPricing {
+  id: string;
+  name: string;
+  // Used automatically for the group's customers (no price override needed)
+  priceListId: string | null;
+  // Taken off every line automatically (after line discounts), 0–100
+  discountPercent: number;
+}
+
 export interface PricingContext {
   branchId?: string | null;
   // Explicitly chosen list (e.g. wholesale); otherwise only standard/promotional lists apply
@@ -116,5 +126,38 @@ export class PricingService {
       select: { id: true, priceListId: true },
     });
     return group?.priceListId !== priceListId;
+  }
+
+  /**
+   * The pricing of a customer's group (active groups only): its price list is
+   * the customer's automatic price list and its discount the group discount.
+   */
+  async customerGroupPricing(
+    tenantId: string,
+    groupId: string | null | undefined,
+  ): Promise<CustomerGroupPricing | null> {
+    if (!groupId) return null;
+    const group = await this.entryRepository.manager.findOne(CustomerGroup, {
+      where: { id: groupId, tenantId },
+      select: {
+        id: true,
+        name: true,
+        priceListId: true,
+        discountPercent: true,
+        isActive: true,
+      },
+    });
+    if (!group || group.isActive === false) return null;
+    const discountPercent = Math.min(
+      Math.max(Number(group.discountPercent ?? 0), 0),
+      100,
+    );
+    if (!group.priceListId && discountPercent <= 0) return null;
+    return {
+      id: group.id,
+      name: group.name,
+      priceListId: group.priceListId ?? null,
+      discountPercent,
+    };
   }
 }

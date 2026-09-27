@@ -58,7 +58,10 @@ describe('POS API (e2e)', () => {
     body?: object,
     bearer: string | null = token,
   ) => {
-    let req = request(app.getHttpServer())[method](`/api/v1${path}`);
+    // API-client mode: tokens in the body, bearer auth (see auth/session-cookie.ts)
+    let req = request(app.getHttpServer())
+      [method](`/api/v1${path}`)
+      .set('X-Auth-Mode', 'token');
     if (bearer) req = req.set('Authorization', `Bearer ${bearer}`);
     return body ? req.send(body) : req;
   };
@@ -122,6 +125,60 @@ describe('POS API (e2e)', () => {
       expect(r.status).toBe(200);
       expect(r.body.user).toMatchObject({ role: 'owner', tenantId });
       token = r.body.accessToken;
+    });
+
+    it('signs the web app in with an HttpOnly cookie and checks the CSRF header', async () => {
+      const server = app.getHttpServer();
+      // Without the anti-CSRF header even sign-in is refused (login CSRF)
+      let r = await request(server)
+        .post('/api/v1/auth/login')
+        .send({ email: OWNER_EMAIL, password: OWNER_PASSWORD });
+      expect(r.status).toBe(403);
+
+      r = await request(server)
+        .post('/api/v1/auth/login')
+        .set('X-Requested-With', 'pos-web')
+        .send({ email: OWNER_EMAIL, password: OWNER_PASSWORD });
+      expect(r.status).toBe(200);
+      expect(r.body.accessToken).toBeUndefined();
+      expect(r.body.user).toMatchObject({ role: 'owner', tenantId });
+      const setCookie = ([] as string[]).concat(r.headers['set-cookie'] ?? []);
+      const session = setCookie.find((c) => c.startsWith('pos_session='));
+      expect(session).toMatch(/HttpOnly/i);
+      expect(session).toMatch(/SameSite=Strict/i);
+      expect(session).toMatch(/Path=\/api\/v1/);
+      const cookie = session!.split(';')[0];
+
+      // Reads work with the cookie alone
+      r = await request(server)
+        .get('/api/v1/auth/stores')
+        .set('Cookie', cookie);
+      expect(r.status).toBe(200);
+      // A state-changing request without the header is refused...
+      r = await request(server).post('/api/v1/auth/me').set('Cookie', cookie);
+      expect(r.status).toBe(403);
+      // ...and accepted with it
+      r = await request(server)
+        .post('/api/v1/auth/me')
+        .set('Cookie', cookie)
+        .set('X-Requested-With', 'pos-web');
+      expect(r.status).toBe(200);
+
+      // Sign-out revokes the session and clears the cookie
+      r = await request(server)
+        .post('/api/v1/auth/logout')
+        .set('Cookie', cookie)
+        .set('X-Requested-With', 'pos-web');
+      expect(r.status).toBe(200);
+      expect(
+        ([] as string[])
+          .concat(r.headers['set-cookie'] ?? [])
+          .some((c) => /^pos_session=;/.test(c)),
+      ).toBe(true);
+      r = await request(server)
+        .get('/api/v1/auth/stores')
+        .set('Cookie', cookie);
+      expect(r.status).toBe(401);
     });
 
     it('rejects a wrong password', async () => {

@@ -19,6 +19,7 @@ import {
 import { IsQuantity } from '../common/dto/quantity.decorator';
 import { CartDiscountInput } from '../sales/sales.dto';
 import { EstimateStatus } from '../database/entities/estimate.entity';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 export class EstimateItemInput {
   @IsUUID() variantId: string;
@@ -37,7 +38,12 @@ export class CreateEstimateDto {
   @IsUUID() @IsOptional() branchId?: string | null;
   @IsDateString() @IsOptional() issueDate?: string;
   // Defaults to 30 days after the issue date
-  @IsDateString() @IsOptional() validUntil?: string;
+  @IsDateString()
+  @IsOnOrAfterField('issueDate', {
+    message: 'The valid-until date is before the issue date',
+  })
+  @IsOptional()
+  validUntil?: string;
 
   @IsArray()
   @ArrayMinSize(1)

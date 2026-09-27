@@ -19,6 +19,7 @@ import {
   DiscountStatus,
   DiscountType,
 } from '../database/entities/discount.entity';
+import { IsOnOrAfterField } from '../common/validation/date-rules';
 
 export class CreateDiscountDto {
   @IsString() @IsNotEmpty() @MaxLength(50) code: string;
@@ -38,7 +39,10 @@ export class CreateDiscountDto {
   // Uses allowed per customer (a sale using the code then needs a customer)
   @IsInt() @Min(1) @IsOptional() usageLimitPerCustomer?: number | null;
   @IsDateString() @IsOptional() validFrom?: string | null;
-  @IsDateString() @IsOptional() validTo?: string | null;
+  @IsDateString()
+  @IsOnOrAfterField('validFrom')
+  @IsOptional()
+  validTo?: string | null;
   @IsArray()
   @IsUUID('all', { each: true })
   @IsOptional()
