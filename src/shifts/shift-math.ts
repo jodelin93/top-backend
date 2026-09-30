@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { round2 } from '../sales/sale-calculator';
 import type { DenominationCount } from '../database/entities/shift.entity';
+import { CashMovementType } from '../database/entities/cash-movement.entity';
 
 /**
  * Pure cash-drawer arithmetic (no I/O) so it can be unit tested.
@@ -74,6 +75,14 @@ export interface ForeignCashBreakdown {
   cashSales: number;
   // Change handed back in this currency
   changeGiven: number;
+  // Paid-in, paid-out and safe drops made in this currency
+  paidIn?: number;
+  paidOut?: number;
+  safeDrops?: number;
+  // Cash refunds handed back in this currency (money that was paid in it)
+  cashRefunds?: number;
+  // Expenses paid from the drawer in this currency
+  expensePayouts?: number;
   expected: number;
 }
 
@@ -88,37 +97,123 @@ export interface ForeignCashResult {
 }
 
 /**
- * Add the foreign cash the shift opened with (handover) to what its sales took:
- * expected = opening + tendered − change, per currency. A currency that was only
- * in the opening float is listed too, so it must be counted at close.
+ * Add the foreign cash the shift opened with (typed at opening or a handover) and
+ * the paid-ins, paid-outs, safe drops and cash refunds made in each currency to what its sales
+ * took: expected = opening + tendered − change + paid in − paid out − safe drops,
+ * per currency. A currency with only an opening float or a movement is listed too,
+ * so it must be counted at close.
  */
 export function withOpeningForeign(
   foreign: ForeignCashBreakdown[],
   opening: { currencyCode: string; amount: number }[] | null | undefined,
+  movements: { currencyCode: string; type: string; amount: number }[] = [],
 ): ForeignCashBreakdown[] {
-  const byCode = new Map(
-    foreign.map((f) => [f.currencyCode, { ...f, openingFloat: 0 }]),
+  type Row = ForeignCashBreakdown &
+    Required<
+      Pick<
+        ForeignCashBreakdown,
+        | 'openingFloat'
+        | 'paidIn'
+        | 'paidOut'
+        | 'safeDrops'
+        | 'cashRefunds'
+        | 'expensePayouts'
+      >
+    >;
+  const byCode = new Map<string, Row>(
+    foreign.map((f) => [
+      f.currencyCode,
+      {
+        ...f,
+        openingFloat: 0,
+        paidIn: 0,
+        paidOut: 0,
+        safeDrops: 0,
+        cashRefunds: 0,
+        expensePayouts: 0,
+      },
+    ]),
   );
+  const rowFor = (code: string): Row => {
+    let row = byCode.get(code);
+    if (!row) {
+      row = {
+        currencyCode: code,
+        openingFloat: 0,
+        cashSales: 0,
+        changeGiven: 0,
+        paidIn: 0,
+        paidOut: 0,
+        safeDrops: 0,
+        cashRefunds: 0,
+        expensePayouts: 0,
+        expected: 0,
+      };
+      byCode.set(code, row);
+    }
+    return row;
+  };
   for (const o of opening ?? []) {
-    const code = o.currencyCode.toUpperCase();
     const amount = round2(Number(o.amount) || 0);
     if (amount <= 0) continue;
-    const row = byCode.get(code) ?? {
-      currencyCode: code,
-      openingFloat: 0,
-      cashSales: 0,
-      changeGiven: 0,
-      expected: 0,
-    };
+    const row = rowFor(o.currencyCode.toUpperCase());
     row.openingFloat = round2(row.openingFloat + amount);
-    byCode.set(code, row);
+  }
+  const FIELD: Partial<
+    Record<
+      string,
+      'paidIn' | 'paidOut' | 'safeDrops' | 'cashRefunds' | 'expensePayouts'
+    >
+  > = {
+    [CashMovementType.PAID_IN]: 'paidIn',
+    [CashMovementType.PAID_OUT]: 'paidOut',
+    [CashMovementType.SAFE_DROP]: 'safeDrops',
+    [CashMovementType.REFUND]: 'cashRefunds',
+    [CashMovementType.EXPENSE]: 'expensePayouts',
+  };
+  for (const m of movements) {
+    const field = FIELD[m.type];
+    const amount = round2(Number(m.amount) || 0);
+    if (!field || amount <= 0 || !m.currencyCode) continue;
+    const row = rowFor(m.currencyCode.toUpperCase());
+    row[field] = round2(row[field] + amount);
   }
   return [...byCode.values()]
     .map((f) => ({
       ...f,
-      expected: round2(f.openingFloat + f.cashSales - f.changeGiven),
+      expected: round2(
+        f.openingFloat +
+          f.cashSales -
+          f.changeGiven +
+          f.paidIn -
+          f.paidOut -
+          f.safeDrops -
+          f.cashRefunds -
+          f.expensePayouts,
+      ),
     }))
     .sort((a, b) => a.currencyCode.localeCompare(b.currencyCode));
+}
+
+/**
+ * Currency of a paid-in / paid-out / safe drop: null for the shift's currency,
+ * else an accepted currency (one with an exchange rate).
+ */
+export function movementCurrency(
+  requested: string | undefined,
+  shiftCurrency: string,
+  exchangeRates: Record<string, number> | null | undefined,
+): string | null {
+  if (!requested) return null;
+  const code = requested.toUpperCase();
+  if (code === shiftCurrency.trim().toUpperCase()) return null;
+  const accepted = Object.keys(exchangeRates ?? {}).map((c) => c.toUpperCase());
+  if (!accepted.includes(code)) {
+    throw new BadRequestException(
+      `${code} is not a currency this store accepts`,
+    );
+  }
+  return code;
 }
 
 /**

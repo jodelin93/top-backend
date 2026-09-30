@@ -7,6 +7,7 @@ import {
   evaluateVariance,
   expectedCash,
   foreignOpeningFloats,
+  movementCurrency,
   normalizeDenominations,
   withOpeningForeign,
 } from './shift-math';
@@ -230,6 +231,11 @@ describe('withOpeningForeign', () => {
         openingFloat: 20,
         cashSales: 50,
         changeGiven: 5,
+        paidIn: 0,
+        paidOut: 0,
+        safeDrops: 0,
+        cashRefunds: 0,
+        expensePayouts: 0,
         expected: 65,
       },
       // Only in the opening float: still expected (and counted) at close
@@ -238,6 +244,11 @@ describe('withOpeningForeign', () => {
         openingFloat: 10,
         cashSales: 0,
         changeGiven: 0,
+        paidIn: 0,
+        paidOut: 0,
+        safeDrops: 0,
+        cashRefunds: 0,
+        expensePayouts: 0,
         expected: 10,
       },
     ]);
@@ -255,6 +266,11 @@ describe('withOpeningForeign', () => {
         openingFloat: 0,
         cashSales: 10,
         changeGiven: 0,
+        paidIn: 0,
+        paidOut: 0,
+        safeDrops: 0,
+        cashRefunds: 0,
+        expensePayouts: 0,
         expected: 10,
       },
     ]);
@@ -295,5 +311,75 @@ describe('foreignOpeningFloats', () => {
         rates,
       ),
     ).toThrow(BadRequestException);
+  });
+});
+
+describe('foreign cash movements', () => {
+  it('adds paid-ins and takes paid-outs and safe drops from that currency', () => {
+    const [htg] = withOpeningForeign(
+      [
+        {
+          currencyCode: 'HTG',
+          cashSales: 1000,
+          changeGiven: 200,
+          expected: 800,
+        },
+      ],
+      [{ currencyCode: 'HTG', amount: 2500 }],
+      [
+        { currencyCode: 'HTG', type: 'paid_in', amount: 500 },
+        { currencyCode: 'HTG', type: 'paid_out', amount: 300 },
+        { currencyCode: 'htg', type: 'safe_drop', amount: 1000 },
+      ],
+    );
+    expect(htg).toMatchObject({
+      openingFloat: 2500,
+      paidIn: 500,
+      paidOut: 300,
+      safeDrops: 1000,
+      expected: 2500 + 1000 - 200 + 500 - 300 - 1000,
+    });
+  });
+
+  it('lists a currency that only had a movement', () => {
+    expect(
+      withOpeningForeign([], null, [
+        { currencyCode: 'HTG', type: 'paid_in', amount: 750 },
+      ]),
+    ).toEqual([
+      expect.objectContaining({
+        currencyCode: 'HTG',
+        paidIn: 750,
+        expected: 750,
+      }),
+    ]);
+  });
+
+  it('keeps the shift currency as null and refuses unknown currencies', () => {
+    const rates = { HTG: 132.5 };
+    expect(movementCurrency(undefined, 'USD', rates)).toBeNull();
+    expect(movementCurrency('usd', 'USD', rates)).toBeNull();
+    expect(movementCurrency('htg', 'USD', rates)).toBe('HTG');
+    expect(() => movementCurrency('EUR', 'USD', rates)).toThrow(
+      BadRequestException,
+    );
+  });
+});
+
+describe('foreign cash refunds', () => {
+  it('takes HTG handed back on a return out of the HTG drawer', () => {
+    const [htg] = withOpeningForeign(
+      [
+        {
+          currencyCode: 'HTG',
+          cashSales: 1350,
+          changeGiven: 0,
+          expected: 1350,
+        },
+      ],
+      null,
+      [{ currencyCode: 'HTG', type: 'refund', amount: 1350 }],
+    );
+    expect(htg).toMatchObject({ cashRefunds: 1350, expected: 0 });
   });
 });

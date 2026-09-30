@@ -1,3 +1,4 @@
+import { paidAcrossCurrencies } from './payables.service';
 import {
   addDays,
   agingBucket,
@@ -355,5 +356,43 @@ describe('reorder suggestions', () => {
       suggestedReorderQuantity({ ...base, maxStockLevel: 20, onOrder: 1 }),
     ).toBe(16);
     expect(suggestedReorderQuantity({ ...base, minOrderQty: 12 })).toBe(12);
+  });
+});
+
+describe('paidAcrossCurrencies', () => {
+  const settings = {
+    currencyCode: 'USD',
+    exchangeRates: { HTG: 135 },
+    exchangeBuyRates: { HTG: 130 },
+  };
+
+  it('values HTG paid against a USD balance at the sell rate', () => {
+    expect(
+      paidAcrossCurrencies(
+        { amount: 1, currencyCode: 'HTG', tenderedAmount: 13500 },
+        'USD',
+        settings,
+      ),
+    ).toMatchObject({
+      amount: 100,
+      tendered: { currencyCode: 'HTG', amount: 13500 },
+    });
+  });
+
+  it('turns USD paid against an HTG balance into HTG at the buy rate', () => {
+    expect(
+      paidAcrossCurrencies(
+        { amount: 1, currencyCode: 'USD', tenderedAmount: 100 },
+        'HTG',
+        settings,
+      ).amount,
+    ).toBe(13000);
+  });
+
+  it('leaves a payment in the supplier currency alone', () => {
+    expect(paidAcrossCurrencies({ amount: 42 }, 'USD', settings)).toEqual({
+      amount: 42,
+      tendered: null,
+    });
   });
 });

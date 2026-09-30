@@ -814,6 +814,7 @@ export class PurchaseOrdersService {
           userId,
           supplierId: po.supplierId,
           purchaseOrderId: po.id,
+          currencyCode: po.currencyCode,
           locationId: po.locationId,
           dto,
           overReceiptApprovedById: overTolerance ? overApproverId : null,
@@ -962,6 +963,7 @@ export class PurchaseOrdersService {
           userId,
           supplierId: supplier.id,
           purchaseOrderId: null,
+          currencyCode: supplier.currencyCode,
           locationId: location.id,
           dto,
           overReceiptApprovedById: null,
@@ -1088,6 +1090,9 @@ export class PurchaseOrdersService {
       userId: string;
       supplierId: string;
       purchaseOrderId: string | null;
+      // Currency of the order / supplier (null = the store's): costs in another
+      // currency (e.g. HTG) enter stock valued in the store currency at the sell rate
+      currencyCode: string | null;
       locationId: string;
       dto: { idempotencyKey: string; reference?: string; notes?: string };
       overReceiptApprovedById: string | null;
@@ -1111,6 +1116,24 @@ export class PurchaseOrdersService {
     });
     const stockQty = (l: (typeof input.lines)[number]) =>
       addQty(l.quantity, l.damagedAccepted ? l.damagedQuantity : 0);
+    // Stock is valued in the store currency: HTG costs → USD at the sell rate
+    const settings = await this.settingsService.getSettings(tenantId);
+    const docCurrency = input.currencyCode?.trim().toUpperCase();
+    const costRate =
+      docCurrency && docCurrency !== settings.currencyCode.toUpperCase()
+        ? Number(settings.exchangeRates?.[docCurrency]) || null
+        : null;
+    if (
+      docCurrency &&
+      docCurrency !== settings.currencyCode.toUpperCase() &&
+      !costRate
+    ) {
+      throw new BadRequestException(
+        `${docCurrency} has no exchange rate: add it in Settings before receiving`,
+      );
+    }
+    const stockCost = (unitCost: number) =>
+      costRate ? Math.round((unitCost / costRate) * 10_000) / 10_000 : unitCost;
     const totalCost = sumMoney(
       input.lines.map((l) => lineAmount(stockQty(l), l.unitCost)),
     );
@@ -1153,7 +1176,7 @@ export class PurchaseOrdersService {
         referenceType: 'goods_receipt',
         referenceId: receipt.id,
         referenceNumber: receiptNumber,
-        cost: line.unitCost,
+        cost: stockCost(line.unitCost),
         notes: input.notes,
       };
       if (line.quantity > 0) {

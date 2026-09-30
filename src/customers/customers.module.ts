@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SettingsModule } from '../settings/settings.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Customer } from '../database/entities/customer.entity';
 import { CustomerGroup } from '../database/entities/customer-group.entity';
@@ -36,6 +37,7 @@ import { CustomerProfileController } from './customer-profile.controller';
       PriceList,
     ]),
     ShiftsModule,
+    SettingsModule,
   ],
   // The admin controller first: its static routes (/customers/duplicates) must win over /customers/:id
   controllers: [

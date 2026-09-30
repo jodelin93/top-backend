@@ -5,6 +5,9 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { SettingsService } from '../../settings/settings.service';
+import { toSaleCurrency } from '../../currency/currency-math';
+import { round2 } from '../../sales/sale-calculator';
 import { DataSource, EntityManager } from 'typeorm';
 import { Customer } from '../../database/entities/customer.entity';
 import { CustomerGroup } from '../../database/entities/customer-group.entity';
@@ -127,6 +130,7 @@ export class CustomerCreditService {
     private shiftsService: ShiftsService,
     @Optional() private outbox?: OutboxService,
     @Optional() private approvalsService?: ApprovalsService,
+    @Optional() private settingsService?: SettingsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -483,6 +487,34 @@ export class CustomerCreditService {
     dto: RecordCustomerPaymentDto,
     approvalToken?: string,
   ): Promise<PaymentResult> {
+    // Paid in another currency: the amount credited is what was handed over,
+    // valued at the sell rate (HTG → USD)
+    let tendered: {
+      currencyCode: string;
+      amount: number;
+      rate: number;
+    } | null = null;
+    const settings = await this.settingsService?.getSettings(tenantId);
+    const paidIn = dto.currencyCode?.toUpperCase();
+    if (paidIn && settings && paidIn !== settings.currencyCode.toUpperCase()) {
+      const rate = Number(settings.exchangeRates?.[paidIn]);
+      if (!(rate > 0)) {
+        throw new BadRequestException(
+          `${paidIn} is not accepted by this store`,
+        );
+      }
+      if (!dto.tenderedAmount) {
+        throw new BadRequestException(
+          `Give the amount paid in ${paidIn} (tenderedAmount)`,
+        );
+      }
+      tendered = {
+        currencyCode: paidIn,
+        amount: round2(dto.tenderedAmount),
+        rate,
+      };
+      dto = { ...dto, amount: round2(toSaleCurrency(tendered.amount, rate)) };
+    }
     if (dto.idempotencyKey) {
       const existing = await this.dataSource
         .getRepository(CustomerCreditEntry)
@@ -573,7 +605,12 @@ export class CustomerCreditService {
           paymentMethodId: method.id,
           paymentRef: dto.reference?.trim() || null,
           note:
-            dto.note?.trim() || `Payment (${method.name?.en ?? method.code})`,
+            dto.note?.trim() ||
+            `Payment (${method.name?.en ?? method.code})${
+              tendered
+                ? ` · ${tendered.amount.toFixed(2)} ${tendered.currencyCode} @ ${tendered.rate}`
+                : ''
+            }`,
           idempotencyKey: dto.idempotencyKey ?? null,
           approverId,
         });
@@ -582,7 +619,9 @@ export class CustomerCreditService {
             tenantId,
             shiftId: shift.id,
             type: CashMovementType.PAID_IN,
-            amount: dto.amount,
+            // Cash paid in HTG goes into the HTG cash
+            amount: tendered?.amount ?? dto.amount,
+            currencyCode: tendered?.currencyCode ?? null,
             userId: user.id,
             reason: `Payment on account ${customer.code}`,
             reference: dto.reference?.trim() || null,

@@ -74,6 +74,11 @@ export class CashMovement extends BaseEntity {
   @Column({ type: 'numeric', precision: 19, scale: 4, nullable: false })
   amount: number;
 
+  // Another currency the store accepts (paid-in / paid-out / safe drop in HTG...);
+  // null = the shift's currency
+  @Column({ type: 'varchar', length: 3, nullable: true })
+  currencyCode: string | null;
+
   @Column({ type: 'varchar', length: 500, nullable: true })
   reason: string | null;
 

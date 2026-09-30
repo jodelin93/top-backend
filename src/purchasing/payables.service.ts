@@ -3,6 +3,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import {
+  buyRatesOf,
+  exchangeRate as rateBetween,
+} from '../currency/currency-math';
+import type { StoreSettings } from '../settings/settings.service';
 import { DataSource, EntityManager, In, Not } from 'typeorm';
 import { Supplier } from '../database/entities/supplier.entity';
 import { SupplierInvoice } from '../database/entities/supplier-invoice.entity';
@@ -278,7 +283,10 @@ export class PayablesService {
     dto: CreateSupplierPaymentDto,
   ) {
     const supplier = await this.findSupplier(tenantId, dto.supplierId);
-    const { currencyCode } = await this.settingsService.getSettings(tenantId);
+    const settings = await this.settingsService.getSettings(tenantId);
+    const { currencyCode } = settings;
+    const docCurrency = (supplier.currencyCode ?? currencyCode).toUpperCase();
+    const paid = paidAcrossCurrencies(dto, docCurrency, settings);
     const id = await this.dataSource.transaction(async (manager) => {
       const paymentNumber = await nextDocumentNumber(manager, {
         table: 'supplier_payments',
@@ -294,8 +302,11 @@ export class PayablesService {
           paymentDate: (
             dto.paymentDate ?? todayIn(await storeTimezone(manager, tenantId))
           ).slice(0, 10),
-          amount: fromCents(toCents(dto.amount)),
+          amount: fromCents(toCents(paid.amount)),
           currencyCode: supplier.currencyCode ?? currencyCode,
+          tenderedCurrency: paid.tendered?.currencyCode ?? null,
+          tenderedAmount: paid.tendered?.amount ?? null,
+          exchangeRate: paid.tendered?.rate ?? null,
           method: dto.method,
           reference: dto.reference ?? null,
           notes: dto.notes ?? null,
@@ -756,4 +767,57 @@ export class PayablesService {
     if (!supplier) throw new NotFoundException('Supplier not found');
     return supplier;
   }
+}
+
+/**
+ * A payment typed in another currency than the document's: what it settles in the
+ * document's currency. Money coming from HTG is valued at the sell rate (HTG → USD);
+ * dollars turned into HTG use the buy rate (USD → HTG).
+ */
+export function paidAcrossCurrencies(
+  input: { amount: number; currencyCode?: string; tenderedAmount?: number },
+  docCurrency: string,
+  settings: Pick<
+    StoreSettings,
+    'currencyCode' | 'exchangeRates' | 'exchangeBuyRates'
+  >,
+): {
+  amount: number;
+  tendered: { currencyCode: string; amount: number; rate: number } | null;
+} {
+  const paidIn = input.currencyCode?.toUpperCase();
+  if (!paidIn || paidIn === docCurrency) {
+    return { amount: input.amount, tendered: null };
+  }
+  if (!input.tenderedAmount) {
+    throw new BadRequestException(
+      `Give the amount paid in ${paidIn} (tenderedAmount)`,
+    );
+  }
+  const store = settings.currencyCode.toUpperCase();
+  // To the store currency at the sell rate, then out of it at the buy rate
+  const toStore =
+    paidIn === store
+      ? 1
+      : rateBetween(settings.exchangeRates, store, paidIn, store);
+  const fromStore =
+    docCurrency === store
+      ? 1
+      : rateBetween(
+          buyRatesOf(settings.exchangeRates, settings.exchangeBuyRates),
+          store,
+          store,
+          docCurrency,
+        );
+  if (!toStore || !fromStore) {
+    throw new BadRequestException(
+      `${paidIn} → ${docCurrency} has no exchange rate`,
+    );
+  }
+  const rate = toStore * fromStore;
+  const tendered = Math.round(input.tenderedAmount * 100) / 100;
+  return {
+    amount: Math.round(tendered * rate * 100) / 100,
+    tendered: { currencyCode: paidIn, amount: tendered, rate },
+  };
 }

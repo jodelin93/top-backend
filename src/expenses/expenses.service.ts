@@ -6,6 +6,8 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { toSaleCurrency } from '../currency/currency-math';
+import type { StoreSettings } from '../settings/settings.service';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   branchScope,
@@ -192,7 +194,9 @@ export class ExpensesService {
   async create(tenantId: string, user: AuthUser, dto: CreateExpenseDto) {
     await this.assertCategory(tenantId, dto.categoryId);
     await this.assertRegister(tenantId, dto.registerId);
-    const { currencyCode } = await this.settingsService.getSettings(tenantId);
+    const settings = await this.settingsService.getSettings(tenantId);
+    const { currencyCode } = settings;
+    const paid = expensePaidIn(dto, settings);
 
     const id = await this.dataSource.transaction(async (manager) => {
       const expenseNumber = await nextDocumentNumber(manager, {
@@ -219,8 +223,11 @@ export class ExpensesService {
           expenseNumber,
           expenseDate,
           categoryId: dto.categoryId ?? null,
-          amount: round2(dto.amount),
+          amount: paid.amount,
           currencyCode,
+          tenderedCurrency: paid.tendered?.currencyCode ?? null,
+          tenderedAmount: paid.tendered?.amount ?? null,
+          exchangeRate: paid.tendered?.rate ?? null,
           description: dto.description.trim(),
           payee: dto.payee?.trim() || null,
           receiptReference: dto.receiptReference?.trim() || null,
@@ -262,15 +269,36 @@ export class ExpensesService {
       this.assertOwnerOrApprover(user, expense);
       this.assertTransition(expense, 'edit');
       const before = { ...expense };
-      const { amount, description, payee, receiptReference, notes, ...rest } =
-        dto;
+      const {
+        amount,
+        currencyCode: paidCurrency,
+        tenderedAmount,
+        description,
+        payee,
+        receiptReference,
+        notes,
+        ...rest
+      } = dto;
       Object.assign(
         expense,
         Object.fromEntries(
           Object.entries(rest).filter(([, value]) => value !== undefined),
         ),
       );
-      if (amount !== undefined) expense.amount = round2(amount);
+      if (amount !== undefined || tenderedAmount !== undefined) {
+        const paid = expensePaidIn(
+          {
+            amount: amount ?? Number(expense.amount),
+            currencyCode: paidCurrency,
+            tenderedAmount,
+          },
+          await this.settingsService.getSettings(tenantId),
+        );
+        expense.amount = paid.amount;
+        expense.tenderedCurrency = paid.tendered?.currencyCode ?? null;
+        expense.tenderedAmount = paid.tendered?.amount ?? null;
+        expense.exchangeRate = paid.tendered?.rate ?? null;
+      }
       if (description !== undefined) expense.description = description.trim();
       if (payee !== undefined) expense.payee = payee?.trim() || null;
       if (receiptReference !== undefined) {
@@ -438,7 +466,11 @@ export class ExpensesService {
           tenantId,
           shiftId: shift.id,
           type: CashMovementType.EXPENSE,
-          amount: expense.amount,
+          // Paid in HTG: out of the HTG cash
+          amount: expense.tenderedAmount
+            ? Number(expense.tenderedAmount)
+            : expense.amount,
+          currencyCode: expense.tenderedCurrency ?? null,
           userId: user.id,
           approverId: expense.approvedById,
           reason: `${expense.expenseNumber}: ${expense.description}`.slice(
@@ -694,6 +726,12 @@ export class ExpensesService {
       categoryName: expense.category?.name ?? null,
       amount: round2(Number(expense.amount)),
       currencyCode: expense.currencyCode,
+      // Paid in another currency (null = the store currency)
+      tenderedCurrency: expense.tenderedCurrency ?? null,
+      tenderedAmount:
+        expense.tenderedAmount != null ? Number(expense.tenderedAmount) : null,
+      exchangeRate:
+        expense.exchangeRate != null ? Number(expense.exchangeRate) : null,
       description: expense.description,
       payee: expense.payee,
       receiptReference: expense.receiptReference,
@@ -729,4 +767,35 @@ function displayName(user: {
   return (
     [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email
   );
+}
+
+/**
+ * An expense amount typed in some currency: the store-currency amount (HTG valued at
+ * the sell rate) and, for another accepted currency, what was paid in it
+ */
+export function expensePaidIn(
+  input: { amount: number; currencyCode?: string; tenderedAmount?: number },
+  settings: Pick<StoreSettings, 'currencyCode' | 'exchangeRates'>,
+): {
+  amount: number;
+  tendered: { currencyCode: string; amount: number; rate: number } | null;
+} {
+  const code = input.currencyCode?.toUpperCase();
+  if (!code || code === settings.currencyCode.toUpperCase()) {
+    return { amount: round2(input.amount), tendered: null };
+  }
+  const rate = Number(settings.exchangeRates?.[code]);
+  if (!(rate > 0)) {
+    throw new BadRequestException(`${code} is not accepted by this store`);
+  }
+  if (!input.tenderedAmount) {
+    throw new BadRequestException(
+      `Give the amount paid in ${code} (tenderedAmount)`,
+    );
+  }
+  const amount = round2(input.tenderedAmount);
+  return {
+    amount: round2(toSaleCurrency(amount, rate)),
+    tendered: { currencyCode: code, amount, rate },
+  };
 }

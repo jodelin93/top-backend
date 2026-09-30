@@ -32,6 +32,17 @@ export class SupplierPayment extends BaseEntity {
   @Column({ type: 'numeric', precision: 19, scale: 4, nullable: false })
   amount: number;
 
+  // Paid in another currency than the supplier's (e.g. HTG against a USD balance):
+  // that currency, the amount paid in it and the rate used (null = same currency)
+  @Column({ type: 'varchar', length: 3, nullable: true })
+  tenderedCurrency: string | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 4, nullable: true })
+  tenderedAmount: number | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 8, nullable: true })
+  exchangeRate: number | null;
+
   @Column({ type: 'char', length: 3, nullable: false })
   currencyCode: string;
 

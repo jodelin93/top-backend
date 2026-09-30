@@ -393,7 +393,17 @@ export const SUPPLIER_PAYMENT_METHODS = [
 
 export class CreateSupplierPaymentDto {
   @IsUUID() supplierId: string;
+  // In the supplier's currency. Paid in another currency: worked out from tenderedAmount
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
+  // Paid in another currency than the supplier's (e.g. HTG): HTG → USD at the sell
+  // rate, USD → HTG at the buy rate
+  @Matches(/^[A-Z]{3}$/, { message: 'currencyCode must be an ISO 4217 code' })
+  @IsOptional()
+  currencyCode?: string;
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @IsOptional()
+  tenderedAmount?: number;
   @IsIn(SUPPLIER_PAYMENT_METHODS)
   method: (typeof SUPPLIER_PAYMENT_METHODS)[number];
   @IsDateString() @IsNotFutureDate() @IsOptional() paymentDate?: string;

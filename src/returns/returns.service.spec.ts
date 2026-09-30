@@ -729,6 +729,28 @@ describe('ReturnsService', () => {
       );
     });
 
+    it('gives cash paid in HTG back in HTG, at the rate it was paid at', async () => {
+      // 20.00 sale paid 2,700 HTG in cash at 135; 10.00 returned → 1,350 HTG back
+      payments = [
+        {
+          ...payment('pay-htg', methods[1], '20'),
+          tenderedCurrency: 'HTG',
+          tenderedAmount: '2700',
+          exchangeRate: '135',
+        },
+      ];
+      await service.create(TENANT, OWNER, returnDto());
+      expect(shiftsService.recordCashMovement).toHaveBeenCalledTimes(1);
+      expect(shiftsService.recordCashMovement).toHaveBeenCalledWith(
+        manager,
+        expect.objectContaining({
+          amount: 1350,
+          currencyCode: 'HTG',
+          sourceType: 'return:HTG',
+        }),
+      );
+    });
+
     it('credits a sale fully on account without any cash', async () => {
       withCustomer();
       payments = [payment('pay-acct', onAccountMethod, '20')];

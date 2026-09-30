@@ -39,6 +39,9 @@ export interface DomainEventPayloads {
     registerId: string;
     type: string;
     amount: Money;
+    // Currency of the amount (the shift's, or another accepted currency, e.g. HTG);
+    // optional: events recorded before it existed have none
+    currencyCode?: string;
     expenseId: string | null;
     sourceType: string | null;
     sourceId: string | null;

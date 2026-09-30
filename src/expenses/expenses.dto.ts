@@ -11,6 +11,7 @@ import {
   IsUUID,
   Matches,
   Max,
+  Length,
   MaxLength,
   Min,
   MinLength,
@@ -47,7 +48,14 @@ export class CreateExpenseDto {
   // YYYY-MM-DD, defaults to today
   @IsDateString() @IsNotFutureDate() @IsOptional() expenseDate?: string;
   @IsUUID() @IsOptional() categoryId?: string;
+  // Store currency. Paid in another accepted currency: worked out from tenderedAmount
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
+  // Paid in another currency the store accepts (e.g. HTG), valued at the sell rate
+  @IsString() @Length(3, 3) @IsOptional() currencyCode?: string;
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @IsOptional()
+  tenderedAmount?: number;
   @IsString() @MinLength(2) @MaxLength(500) description: string;
   @IsString() @MaxLength(255) @IsOptional() payee?: string;
   @IsString() @MaxLength(255) @IsOptional() receiptReference?: string;
@@ -68,6 +76,12 @@ export class UpdateExpenseDto {
   @IsOptional()
   categoryId?: string | null;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) @IsOptional() amount?: number;
+  // With amount: the currency it was paid in (store currency = none)
+  @IsString() @Length(3, 3) @IsOptional() currencyCode?: string;
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @IsOptional()
+  tenderedAmount?: number;
   @IsString() @MinLength(2) @MaxLength(500) @IsOptional() description?: string;
   @ValidateIf((_, v) => v !== null)
   @IsString()

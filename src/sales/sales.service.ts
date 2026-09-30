@@ -120,8 +120,9 @@ import {
   withGiftCardLines,
 } from './stored-value-lines';
 import {
-  changeIn,
+  buyRatesOf,
   exchangeRate,
+  foreignChange,
   toSaleCurrency,
 } from '../currency/currency-math';
 import { CLOCK_TOLERANCE_MS } from '../sync/offline-lease';
@@ -249,7 +250,11 @@ interface OnAccountApproval {
 export interface SaleChangeTender {
   currencyCode: string;
   amount: number;
+  // Buy rate: dollars paid turned into that currency (the part of the change that
+  // came from money paid in that currency goes back at sellRate, without spread)
   exchangeRate: number;
+  // Sell rate the payments in that currency were valued at (absent on older sales)
+  sellRate?: number;
 }
 
 const SALE_REFERENCE = 'sale';
@@ -2464,6 +2469,8 @@ export class SalesService implements OnModuleInit {
     let exactPaid = 0;
     // The same at the store's rates (differs only for offline till rates)
     let exactPaidAtStoreRates = 0;
+    // Exact sale-currency value of the cash paid in each other currency
+    const foreignCashPaid = new Map<string, number>();
     const offlineRates: OfflineRateUse[] = [];
     const rows: ValidatedPayment[] = [];
     for (const payment of dto.payments) {
@@ -2542,6 +2549,12 @@ export class SalesService implements OnModuleInit {
       exactPaidAtStoreRates += atStoreRate;
       if (method.methodType === PaymentMethodType.CASH) {
         cashTotal += tendered ? round2(atStoreRate) : amount;
+        if (tendered) {
+          foreignCashPaid.set(
+            tendered.currencyCode,
+            (foreignCashPaid.get(tendered.currencyCode) ?? 0) + exact,
+          );
+        }
       }
       if (this.loyaltyService.isLoyaltyMethod(method)) {
         loyaltyTotal += amount;
@@ -2583,17 +2596,31 @@ export class SalesService implements OnModuleInit {
     let changeTender: SaleChangeTender | null = null;
     const changeCode = dto.changeCurrency?.toUpperCase();
     if (change > 0 && changeCode && changeCode !== saleCurrency) {
-      const rate = rateTo(changeCode);
-      if (!rate) {
+      const sellRate = rateTo(changeCode);
+      const buyRate = exchangeRate(
+        buyRatesOf(settings.exchangeRates, settings.exchangeBuyRates),
+        settings.currencyCode,
+        saleCurrency,
+        changeCode,
+      );
+      if (!sellRate || !buyRate) {
         throw new BadRequestException(
           `${changeCode} is not accepted by this store`,
         );
       }
-      // From the exact overpayment: 2000 HTG for a 1325 HTG sale gives back 675 HTG
+      // From the exact overpayment. What was paid in that currency goes back at the
+      // rate it came in (2000 HTG for a 1325 HTG sale gives back 675 HTG); dollars
+      // are turned into it at the buy rate
       changeTender = {
         currencyCode: changeCode,
-        amount: changeIn(Math.max(0, exactPaid - total), rate),
-        exchangeRate: rate,
+        amount: foreignChange(
+          Math.max(0, exactPaid - total),
+          foreignCashPaid.get(changeCode) ?? 0,
+          sellRate,
+          buyRate,
+        ),
+        exchangeRate: buyRate,
+        sellRate,
       };
     }
 

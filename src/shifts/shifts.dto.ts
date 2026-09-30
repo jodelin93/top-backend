@@ -106,6 +106,8 @@ export type ManualMovementType = (typeof MANUAL_MOVEMENT_TYPES)[number];
 export class CreateCashMovementDto {
   @IsIn(MANUAL_MOVEMENT_TYPES) type: ManualMovementType;
   @IsNumber() @Min(0.01) amount: number;
+  // Another currency the store accepts (e.g. HTG); default: the shift's currency
+  @IsString() @Length(3, 3) @IsOptional() currencyCode?: string;
   @IsString() @MinLength(2) @MaxLength(500) reason: string;
   @IsString() @MaxLength(255) @IsOptional() reference?: string;
   // Retried requests with the same key do not post twice

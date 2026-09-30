@@ -17,7 +17,15 @@ import { IsOnOrAfterField } from '../../common/validation/date-rules';
 
 /** POST /customers/:id/account/payments */
 export class RecordCustomerPaymentDto {
+  // In the store currency. Paid in another currency: worked out from tenderedAmount
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) amount: number;
+  // Paid in another currency the store accepts (e.g. HTG): that currency and the
+  // amount handed over in it, valued at the sell rate
+  @IsString() @Length(3, 3) @IsOptional() currencyCode?: string;
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  @IsOptional()
+  tenderedAmount?: number;
   // Cash, card, bank transfer, cheque... (not on account / gift card / store credit)
   @IsUUID() paymentMethodId: string;
   // Cheque / transfer number, card approval code

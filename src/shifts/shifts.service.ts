@@ -60,6 +60,7 @@ import {
   evaluateVariance,
   expectedCash,
   foreignOpeningFloats,
+  movementCurrency,
   ForeignCashResult,
   normalizeDenominations,
   VarianceResult,
@@ -95,6 +96,8 @@ export interface RecordCashMovementInput {
   shiftId: string;
   type: CashMovementType;
   amount: number;
+  // Another currency the store accepts; null/omitted = the shift's currency
+  currencyCode?: string | null;
   userId: string;
   approverId?: string | null;
   reason?: string | null;
@@ -168,6 +171,8 @@ export interface ZReport {
     id: string;
     type: CashMovementType;
     amount: number;
+    // null = the shift's currency
+    currencyCode: string | null;
     reason: string | null;
     reference: string | null;
     createdAt: string;
@@ -345,6 +350,7 @@ export class ShiftsService {
       registerId: shift.registerId,
       type: input.type,
       amount,
+      currencyCode: input.currencyCode ?? null,
       userId: input.userId,
       approverId: input.approverId ?? null,
       reason: input.reason ?? null,
@@ -367,6 +373,7 @@ export class ShiftsService {
         metadata: {
           movementId: saved.id,
           amount,
+          currencyCode: saved.currencyCode ?? shift.currencyCode,
           expenseId: saved.expenseId,
           sourceType: saved.sourceType,
           sourceId: saved.sourceId,
@@ -385,6 +392,7 @@ export class ShiftsService {
         registerId: shift.registerId,
         type: saved.type,
         amount,
+        currencyCode: saved.currencyCode ?? shift.currencyCode,
         expenseId: saved.expenseId ?? null,
         sourceType: saved.sourceType ?? null,
         sourceId: saved.sourceId ?? null,
@@ -703,6 +711,7 @@ export class ShiftsService {
     dto: CreateCashMovementDto,
   ) {
     const approverId = requestContext.get()?.approverId ?? null;
+    const settings = await this.settingsService.getSettings(tenantId);
     const movement = await this.dataSource.transaction(async (manager) => {
       const shift = await this.lockShift(manager, tenantId, shiftId);
       if (shift.status !== ShiftStatus.OPEN) {
@@ -715,6 +724,11 @@ export class ShiftsService {
         shiftId,
         type: dto.type,
         amount: dto.amount,
+        currencyCode: movementCurrency(
+          dto.currencyCode,
+          shift.currencyCode,
+          settings.exchangeRates,
+        ),
         userId: user.id,
         approverId,
         reason: dto.reason.trim(),
@@ -1626,14 +1640,25 @@ export class ShiftsService {
     const movements = await manager.query<
       { type: CashMovementType; total: string | number }[]
     >(
-      // 'sale' / 'no_sale' rows are the drawer's trace: cash sales come from payments
+      // 'sale' / 'no_sale' rows are the drawer's trace: cash sales come from payments.
+      // Movements in another currency count in that currency's drawer, below
       `SELECT type, COALESCE(SUM(amount), 0) AS total FROM cash_movements
        WHERE "tenantId" = $1 AND "shiftId" = $2 AND NOT (type::text = ANY($3))
+         AND "currencyCode" IS NULL
        GROUP BY type`,
       [shift.tenantId, shift.id, LEDGER_ONLY_TYPES],
     );
     const sum = (type: CashMovementType) =>
       round2(Number(movements.find((m) => m.type === type)?.total ?? 0));
+    const foreignMovements = await manager.query<
+      { currencyCode: string; type: CashMovementType; total: string | number }[]
+    >(
+      `SELECT "currencyCode", type, COALESCE(SUM(amount), 0) AS total FROM cash_movements
+       WHERE "tenantId" = $1 AND "shiftId" = $2 AND NOT (type::text = ANY($3))
+         AND "currencyCode" IS NOT NULL
+       GROUP BY "currencyCode", type`,
+      [shift.tenantId, shift.id, LEDGER_ONLY_TYPES],
+    );
 
     return {
       openingFloat: round2(Number(shift.openingFloat)),
@@ -1644,7 +1669,15 @@ export class ShiftsService {
       safeDrops: sum(CashMovementType.SAFE_DROP),
       expensePayouts: sum(CashMovementType.EXPENSE),
       cashRefunds: sum(CashMovementType.REFUND),
-      foreign: withOpeningForeign(foreign, shift.openingForeignCash),
+      foreign: withOpeningForeign(
+        foreign,
+        shift.openingForeignCash,
+        foreignMovements.map((m) => ({
+          currencyCode: m.currencyCode,
+          type: m.type,
+          amount: Number(m.total),
+        })),
+      ),
     };
   }
 
@@ -2063,6 +2096,7 @@ export class ShiftsService {
           id: m.id,
           type: m.type,
           amount: round2(Number(m.amount)),
+          currencyCode: m.currencyCode ?? null,
           reason: m.reason,
           reference: m.reference,
           createdAt: new Date(m.createdAt).toISOString(),
@@ -2286,6 +2320,8 @@ export class ShiftsService {
       shiftId: m.shiftId,
       type: m.type,
       amount: round2(Number(m.amount)),
+      // null = the shift's currency
+      currencyCode: m.currencyCode ?? null,
       reason: m.reason,
       reference: m.reference,
       expenseId: m.expenseId,

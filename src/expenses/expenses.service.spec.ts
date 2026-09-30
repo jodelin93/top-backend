@@ -12,7 +12,7 @@ import type { SettingsService } from '../settings/settings.service';
 import type { ShiftsService } from '../shifts/shifts.service';
 import type { ApprovalsService } from '../approvals/approvals.service';
 import { requestContext } from '../common/context/request-context';
-import { ExpensesService } from './expenses.service';
+import { ExpensesService, expensePaidIn } from './expenses.service';
 
 const TENANT = 'tenant-1';
 const cashier = {
@@ -278,5 +278,34 @@ describe('ExpensesService approval', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(saved).toHaveLength(0);
     });
+  });
+});
+
+describe('expensePaidIn', () => {
+  const settings = { currencyCode: 'USD', exchangeRates: { HTG: 135 } };
+
+  it('values an expense paid in HTG at the sell rate', () => {
+    expect(
+      expensePaidIn(
+        { amount: 1, currencyCode: 'HTG', tenderedAmount: 2700 },
+        settings,
+      ),
+    ).toEqual({
+      amount: 20,
+      tendered: { currencyCode: 'HTG', amount: 2700, rate: 135 },
+    });
+  });
+
+  it('keeps store-currency expenses as typed and refuses unknown currencies', () => {
+    expect(expensePaidIn({ amount: 12.5 }, settings)).toEqual({
+      amount: 12.5,
+      tendered: null,
+    });
+    expect(() =>
+      expensePaidIn(
+        { amount: 1, currencyCode: 'EUR', tenderedAmount: 5 },
+        settings,
+      ),
+    ).toThrow();
   });
 });

@@ -6,6 +6,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { changeIn } from '../currency/currency-math';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
   assertBranchAccess,
@@ -144,6 +145,9 @@ export interface PlannedRefund {
   special: SpecialTenderCode | null;
   // Gift card / store credit account the original payment was taken from
   storedValueAccountId: string | null;
+  // Cash refund of money paid in another currency: handed back in it, at the
+  // original payment's rate (null = the sale currency)
+  tendered: { currencyCode: string; amount: number; rate: number } | null;
 }
 
 export interface ReturnableLine {
@@ -565,6 +569,9 @@ export class ReturnsService {
               paymentMethodId: refund.paymentMethodId,
               originalPaymentId: refund.originalPaymentId,
               amount: refund.amount,
+              tenderedCurrency: refund.tendered?.currencyCode ?? null,
+              tenderedAmount: refund.tendered?.amount ?? null,
+              exchangeRate: refund.tendered?.rate ?? null,
               provider: refund.provider,
               providerReference: refund.providerReference,
               idempotencyKey: `return:${saleReturn.id}:${index}`,
@@ -622,16 +629,14 @@ export class ReturnsService {
 
         // ---- Cash out of the drawer ----
         if (cashTotal > 0 && shift) {
-          await this.shiftsService.recordCashMovement(manager, {
+          await this.recordCashRefunds(manager, {
             tenantId,
             shiftId: shift.id,
-            type: CashMovementType.REFUND,
-            amount: cashTotal,
+            refunds,
             userId: user.id,
             approverId,
             reason: `Return ${returnNumber}`,
-            sourceType: 'return',
-            sourceId: saleReturn.id,
+            returnId: saleReturn.id,
           });
         }
 
@@ -901,6 +906,9 @@ export class ReturnsService {
             paymentMethodId: refund.paymentMethodId,
             originalPaymentId: refund.originalPaymentId,
             amount: refund.amount,
+            tenderedCurrency: refund.tendered?.currencyCode ?? null,
+            tenderedAmount: refund.tendered?.amount ?? null,
+            exchangeRate: refund.tendered?.rate ?? null,
             provider: refund.provider,
             providerReference: refund.providerReference,
             idempotencyKey: `return:${saleReturn.id}:credit:${existing + index}`,
@@ -920,16 +928,14 @@ export class ReturnsService {
         customerId: input.customerId ?? null,
       });
       if (cashTotal > 0 && shift) {
-        await this.shiftsService.recordCashMovement(manager, {
+        await this.recordCashRefunds(manager, {
           tenantId,
           shiftId: shift.id,
-          type: CashMovementType.REFUND,
-          amount: cashTotal,
+          refunds,
           userId: user.id,
           approverId,
           reason: `Exchange credit refunded (return ${saleReturn.returnNumber})`,
-          sourceType: 'return',
-          sourceId: saleReturn.id,
+          returnId: saleReturn.id,
         });
       }
 
@@ -1226,6 +1232,56 @@ export class ReturnsService {
    * used on the sale, or more than that method's payments have left to refund
    * (needs sales.refund.any_method).
    */
+  /**
+   * Cash handed back from the drawer: one movement in the sale currency, and one per
+   * other currency paid back in it (HTG refunds come out of the HTG cash)
+   */
+  private async recordCashRefunds(
+    manager: EntityManager,
+    input: {
+      tenantId: string;
+      shiftId: string;
+      refunds: PlannedRefund[];
+      userId: string;
+      approverId: string | null | undefined;
+      reason: string;
+      returnId: string;
+    },
+  ) {
+    const cash = input.refunds.filter((r) => r.isCash);
+    const inSaleCurrency = round2(
+      cash.filter((r) => !r.tendered).reduce((a, r) => a + r.amount, 0),
+    );
+    const foreign = new Map<string, number>();
+    for (const r of cash) {
+      if (!r.tendered) continue;
+      const code = r.tendered.currencyCode;
+      foreign.set(code, round2((foreign.get(code) ?? 0) + r.tendered.amount));
+    }
+    const post = (
+      amount: number,
+      currencyCode: string | null,
+      sourceType: string,
+    ) =>
+      this.shiftsService.recordCashMovement(manager, {
+        tenantId: input.tenantId,
+        shiftId: input.shiftId,
+        type: CashMovementType.REFUND,
+        amount,
+        currencyCode,
+        userId: input.userId,
+        approverId: input.approverId,
+        reason: input.reason,
+        sourceType,
+        sourceId: input.returnId,
+      });
+    if (inSaleCurrency > 0) await post(inSaleCurrency, null, 'return');
+    for (const [code, amount] of foreign) {
+      // One source row per currency (the source index is unique per type)
+      if (amount > 0) await post(amount, code, `return:${code}`);
+    }
+  }
+
   private async planRefunds(
     manager: EntityManager,
     tenantId: string,
@@ -1283,14 +1339,30 @@ export class ReturnsService {
       method: PaymentMethod | null,
     ): PlannedRefund => {
       const special = source?.special ?? specialTenderOf(method);
+      const isCash = special
+        ? false
+        : source
+          ? source.isCash
+          : method?.methodType === PaymentMethodType.CASH;
+      // Cash paid in HTG goes back in HTG at the rate it was paid at
+      const paidIn = source?.payment.tenderedCurrency?.trim();
+      const paidRate = Number(source?.payment.exchangeRate);
+      const tendered =
+        isCash && paidIn && paidRate > 0
+          ? {
+              currencyCode: paidIn,
+              amount: Math.min(
+                changeIn(round2(amount), paidRate),
+                Number(source?.payment.tenderedAmount ?? Infinity),
+              ),
+              rate: paidRate,
+            }
+          : null;
       return {
         paymentMethodId,
         amount: round2(amount),
-        isCash: special
-          ? false
-          : source
-            ? source.isCash
-            : method?.methodType === PaymentMethodType.CASH,
+        tendered,
+        isCash,
         originalPaymentId: source?.paymentId ?? null,
         // Account, stored value and exchange credit move no money at a provider
         provider: special ? null : (source?.payment.provider ?? null),

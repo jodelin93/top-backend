@@ -205,6 +205,9 @@ export class UpdateStoreSettingsDto {
   // Other currencies customers may pay with: units of each per 1 unit of currencyCode,
   // e.g. { "HTG": 132.5 }. An empty object accepts the store currency only.
   @IsObject() @IsOptional() exchangeRates?: Record<string, number>;
+  // Buy rates (store currency turned into that currency, e.g. change in HTG for
+  // dollars); a currency without one uses its sell rate (exchangeRates)
+  @IsObject() @IsOptional() exchangeBuyRates?: Record<string, number>;
   // Default language of the app for the store (each user can still choose their own)
   @IsIn(['en', 'fr', 'ht', 'es']) @IsOptional() language?:
     'en' | 'fr' | 'ht' | 'es';

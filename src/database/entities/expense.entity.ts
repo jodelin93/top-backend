@@ -45,6 +45,17 @@ export class Expense extends BaseEntityWithVersion {
   @Column({ type: 'char', length: 3, nullable: false })
   currencyCode: string;
 
+  // Paid in another currency (e.g. HTG): that currency, the amount in it and the sell
+  // rate `amount` (store currency) was worked out with; null = the store currency
+  @Column({ type: 'varchar', length: 3, nullable: true })
+  tenderedCurrency: string | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 4, nullable: true })
+  tenderedAmount: number | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 8, nullable: true })
+  exchangeRate: number | null;
+
   @Column({ type: 'varchar', length: 500, nullable: false })
   description: string;
 

@@ -146,8 +146,12 @@ export interface StoreSettings {
   loyaltyPointValue: number;
   loyaltyMinRedeemPoints: number;
   loyaltyMaxRedeemPercent: number;
-  // Other accepted currencies: units per 1 unit of currencyCode (e.g. { HTG: 132.5 })
+  // Other accepted currencies: units per 1 unit of currencyCode (e.g. { HTG: 132.5 }).
+  // SELL rates: that currency coming in (a customer paying in HTG) is valued with them
   exchangeRates: Record<string, number>;
+  // BUY rates: store-currency money turned into that currency (change in HTG for
+  // dollars). Only for currencies of exchangeRates; missing = the sell rate
+  exchangeBuyRates: Record<string, number>;
   // Default app language for everyone in the store
   language: 'en' | 'fr' | 'ht' | 'es';
   // Weighted / price-embedded barcodes (GS1 variable measure): two-digit prefixes
@@ -226,6 +230,7 @@ export const DEFAULT_SETTINGS: Omit<StoreSettings, 'storeName'> = {
   loyaltyMinRedeemPoints: 100,
   loyaltyMaxRedeemPercent: 100,
   exchangeRates: {},
+  exchangeBuyRates: {},
   language: 'en',
   weightedBarcodePrefixes: [],
   weightedBarcodeLayout: 'weight',
@@ -316,11 +321,27 @@ export class SettingsService {
     if (patch.costingMethod !== undefined && !options.costingMigration) {
       await this.assertCostingChangeAllowed(tenantId, patch.costingMethod);
     }
-    if (patch.exchangeRates !== undefined) {
+    if (
+      patch.exchangeRates !== undefined ||
+      patch.exchangeBuyRates !== undefined
+    ) {
       const current = await this.getSettings(tenantId);
-      patch.exchangeRates = normalizeExchangeRates(
-        patch.exchangeRates,
-        patch.currencyCode ?? current.currencyCode,
+      const storeCurrency = patch.currencyCode ?? current.currencyCode;
+      if (patch.exchangeRates !== undefined) {
+        patch.exchangeRates = normalizeExchangeRates(
+          patch.exchangeRates,
+          storeCurrency,
+        );
+      }
+      // Buy rates only for accepted currencies: a currency dropped from the sell
+      // rates loses its buy rate too
+      const sell = patch.exchangeRates ?? current.exchangeRates ?? {};
+      const buy = normalizeExchangeRates(
+        patch.exchangeBuyRates ?? current.exchangeBuyRates ?? {},
+        storeCurrency,
+      );
+      patch.exchangeBuyRates = Object.fromEntries(
+        Object.entries(buy).filter(([code]) => code in sell),
       );
     }
 

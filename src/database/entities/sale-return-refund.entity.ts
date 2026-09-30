@@ -33,6 +33,18 @@ export class SaleReturnRefund extends BaseEntity {
   @Column({ type: 'numeric', precision: 19, scale: 4, nullable: false })
   amount: number;
 
+  // Cash paid in another currency (e.g. HTG) goes back in it, at the original
+  // payment's rate: that currency, the amount handed back and the rate (null = the
+  // sale currency)
+  @Column({ type: 'varchar', length: 3, nullable: true })
+  tenderedCurrency: string | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 4, nullable: true })
+  tenderedAmount: number | null;
+
+  @Column({ type: 'numeric', precision: 19, scale: 8, nullable: true })
+  exchangeRate: number | null;
+
   @Column({ type: 'varchar', length: 50, nullable: true })
   provider: string | null;
 
