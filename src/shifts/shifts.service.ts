@@ -59,6 +59,7 @@ import {
   evaluateForeignCash,
   evaluateVariance,
   expectedCash,
+  foreignOpeningFloats,
   ForeignCashResult,
   normalizeDenominations,
   VarianceResult,
@@ -433,6 +434,11 @@ export class ShiftsService {
       );
     }
     const settings = await this.settingsService.getSettings(tenantId);
+    const openingForeignCash = foreignOpeningFloats(
+      dto.foreignFloats,
+      settings.currencyCode,
+      settings.exchangeRates,
+    );
     const openedAt = new Date();
     const businessDate = await this.businessDateFor(
       this.dataSource.manager,
@@ -450,6 +456,7 @@ export class ShiftsService {
           openedById: user.id,
           openedAt,
           openingFloat,
+          openingForeignCash,
           denominations: denominations?.length ? denominations : null,
           notes: dto.notes?.trim() || null,
           currencyCode: settings.currencyCode,
@@ -491,7 +498,7 @@ export class ShiftsService {
       openedById: string;
       openedAt: Date;
       openingFloat: number;
-      // Foreign cash in the drawer at opening (handover)
+      // Foreign cash in the drawer at opening (typed at opening, or a handover)
       openingForeignCash?: { currencyCode: string; amount: number }[] | null;
       denominations: DenominationCount[] | null;
       notes: string | null;

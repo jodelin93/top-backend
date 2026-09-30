@@ -6,6 +6,7 @@ import {
   defaultDenominations,
   evaluateVariance,
   expectedCash,
+  foreignOpeningFloats,
   normalizeDenominations,
   withOpeningForeign,
 } from './shift-math';
@@ -257,5 +258,42 @@ describe('withOpeningForeign', () => {
         expected: 10,
       },
     ]);
+  });
+});
+
+describe('foreignOpeningFloats', () => {
+  const rates = { HTG: 132.5 };
+
+  it('keeps accepted currencies, rounded, and drops zero amounts', () => {
+    expect(
+      foreignOpeningFloats(
+        [{ currencyCode: 'htg', amount: 2500.004 }],
+        'USD',
+        rates,
+      ),
+    ).toEqual([{ currencyCode: 'HTG', amount: 2500 }]);
+    expect(
+      foreignOpeningFloats([{ currencyCode: 'HTG', amount: 0 }], 'USD', rates),
+    ).toEqual([]);
+    expect(foreignOpeningFloats(undefined, 'USD', rates)).toEqual([]);
+  });
+
+  it('refuses the store currency, unknown currencies and duplicates', () => {
+    expect(() =>
+      foreignOpeningFloats([{ currencyCode: 'USD', amount: 5 }], 'USD', rates),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      foreignOpeningFloats([{ currencyCode: 'EUR', amount: 5 }], 'USD', rates),
+    ).toThrow(BadRequestException);
+    expect(() =>
+      foreignOpeningFloats(
+        [
+          { currencyCode: 'HTG', amount: 5 },
+          { currencyCode: 'htg', amount: 6 },
+        ],
+        'USD',
+        rates,
+      ),
+    ).toThrow(BadRequestException);
   });
 });

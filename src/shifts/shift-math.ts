@@ -255,3 +255,33 @@ export function checkCloseAuthority(
       'The variance is above the tolerance: a manager must approve closing this shift',
   };
 }
+
+/**
+ * Foreign cash typed at opening: accepted currencies only (those with an exchange
+ * rate, never the store currency), one entry per currency, zero amounts dropped.
+ */
+export function foreignOpeningFloats(
+  input: { currencyCode: string; amount: number }[] | undefined,
+  storeCurrency: string,
+  exchangeRates: Record<string, number> | null | undefined,
+): { currencyCode: string; amount: number }[] {
+  const accepted = new Set(
+    Object.keys(exchangeRates ?? {}).map((c) => c.toUpperCase()),
+  );
+  const byCode = new Map<string, number>();
+  for (const entry of input ?? []) {
+    const code = entry.currencyCode.toUpperCase();
+    if (code === storeCurrency.toUpperCase() || !accepted.has(code)) {
+      throw new BadRequestException(
+        `${code} is not a currency this store accepts`,
+      );
+    }
+    if (byCode.has(code)) {
+      throw new BadRequestException(`${code} is listed twice`);
+    }
+    byCode.set(code, round2(entry.amount));
+  }
+  return [...byCode]
+    .filter(([, amount]) => amount > 0)
+    .map(([currencyCode, amount]) => ({ currencyCode, amount }));
+}

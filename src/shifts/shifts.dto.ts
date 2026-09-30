@@ -43,7 +43,20 @@ export class OpenShiftDto {
   @IsOptional()
   denominations?: DenominationCountInput[];
 
+  // Cash already in the drawer in the store's other accepted currencies (e.g. HTG)
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => ForeignFloatInput)
+  @IsOptional()
+  foreignFloats?: ForeignFloatInput[];
+
   @IsString() @MaxLength(500) @IsOptional() notes?: string;
+}
+
+export class ForeignFloatInput {
+  @IsString() @Length(3, 3) currencyCode: string;
+  @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(1_000_000_000) amount: number;
 }
 
 export class StartCloseDto {
