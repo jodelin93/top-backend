@@ -34,7 +34,13 @@ export interface ReportFileHeader {
   generatedAt: Date;
   // Currency of the money columns: one code, or null when rows have their own
   currency: string | null;
+  // Page size of the PDF (store setting documentPaper); default Letter
+  paper?: 'letter' | 'a4';
 }
+
+/** PDFKit page size of a store's document paper */
+export const pdfPageSize = (paper: 'letter' | 'a4' | undefined) =>
+  paper === 'a4' ? 'A4' : 'LETTER';
 
 /**
  * Totals row built as rows stream past. Counts are always summed; money only
@@ -377,9 +383,10 @@ export function pdfSection(doc: PDFKit.PDFDocument, title: string) {
 export async function pdfBuffer(
   build: (doc: PDFKit.PDFDocument) => void,
   title: string,
+  paper?: 'letter' | 'a4',
 ): Promise<Buffer> {
   const doc = new PDFDocument({
-    size: 'A4',
+    size: pdfPageSize(paper),
     margin: PAGE_MARGIN,
     info: { Title: title, Producer: 'POS reports' },
   });
@@ -404,7 +411,7 @@ class PdfWriter implements ReportFileWriter {
     private header: ReportFileHeader,
   ) {
     this.doc = new PDFDocument({
-      size: 'A4',
+      size: pdfPageSize(header.paper),
       layout: columns.length > 6 ? 'landscape' : 'portrait',
       margin: PAGE_MARGIN,
       bufferPages: false,

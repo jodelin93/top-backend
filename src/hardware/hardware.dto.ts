@@ -5,11 +5,20 @@ import {
   IsArray,
   IsBoolean,
   IsIn,
+  IsObject,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
+
+/** POST /hardware/jodaprint/sign: what the JodaPrint browser SDK asks to be signed */
+export class JodaPrintSignDto {
+  @IsString() @Matches(/^[a-z]+(\.[a-z]+)*$/) @MaxLength(50) method: string;
+  @IsString() @MaxLength(100) @IsOptional() orgId?: string;
+  @IsObject() @IsOptional() params?: Record<string, unknown>;
+}
 
 export class ReportedPrinterDto {
   @ApiProperty()

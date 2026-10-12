@@ -87,6 +87,8 @@ export class UpdateStoreSettingsDto {
   @IsNumber() @IsOptional() @Min(0) @Max(100) maxDiscountPercent?: number;
   @IsIn(['58mm', '80mm', 'a4', 'letter']) @IsOptional() receiptFormat?:
     '58mm' | '80mm' | 'a4' | 'letter';
+  // Paper of estimates, purchase orders, statements and report PDFs
+  @IsIn(['letter', 'a4']) @IsOptional() documentPaper?: 'letter' | 'a4';
   // Held carts (and their stock reservations) expire after this many hours
   @IsNumber() @IsOptional() @Min(1) @Max(168) heldCartExpiryHours?: number;
   // Selling needs an open shift on the register

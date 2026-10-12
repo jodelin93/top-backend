@@ -81,6 +81,14 @@ export const envSchema = Joi.object<Record<string, unknown>>({
   SIGNUP_THROTTLE_TTL: Joi.number().integer().min(1).default(3600), // seconds
   SIGNUP_THROTTLE_LIMIT: Joi.number().integer().min(1).default(5),
 
+  // JodaPrint print agent: the POS page asks this server to sign its requests to
+  // the agent on the till computer. All three, or none (printing then uses the
+  // browser dialog). The signing key is the Ed25519 private key shown once in the
+  // JodaPrint dashboard (PEM or base64 seed).
+  JODAPRINT_ORG_ID: Joi.string().empty('').optional(),
+  JODAPRINT_KEY_ID: Joi.string().empty('').optional(),
+  JODAPRINT_SIGNING_KEY: Joi.string().empty('').optional(),
+
   // Self-service store sign-up (POST /tenants/signup); off unless 'true'
   ALLOW_SIGNUP: bool().default('false'),
 

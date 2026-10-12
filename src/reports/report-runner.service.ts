@@ -358,9 +358,9 @@ export class ReportRunnerService {
     prepared: Pick<PreparedReport, 'report' | 'branchIds' | 'period'>,
   ): Promise<ReportFileHeader> {
     const [tenant] = await this.dataSource.query<
-      { name: string; currency: string | null }[]
+      { name: string; currency: string | null; paper: string | null }[]
     >(
-      `SELECT t.name, t.settings->>'currencyCode' AS currency FROM tenants t WHERE t.id = $1`,
+      `SELECT t.name, t.settings->>'currencyCode' AS currency, t.settings->>'documentPaper' AS paper FROM tenants t WHERE t.id = $1`,
       [tenantId],
     );
     const branches = prepared.branchIds
@@ -381,6 +381,8 @@ export class ReportRunnerService {
       period: prepared.period,
       generatedAt: new Date(),
       currency: tenant?.currency ?? 'USD',
+      // Letter unless the store chose A4
+      paper: tenant?.paper === 'a4' ? 'a4' : 'letter',
     };
   }
 

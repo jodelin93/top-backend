@@ -39,6 +39,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1139.0",
     "@aws-sdk/s3-request-presigner": "^3.1139.0",
+    "@jodaprint/node": "1.0.1",
     "@nestjs/bull": "^12.0.0",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^12.0.1",

@@ -55,6 +55,9 @@ async function request(method, path, body, { as = current, headers = {}, allow =
       method,
       headers: {
         'Content-Type': 'application/json',
+        // API clients: the anti-CSRF header, and the token in the body (not a cookie)
+        'X-Requested-With': 'pos-web',
+        'X-Auth-Mode': 'token',
         ...(tokens[as] ? { Authorization: `Bearer ${tokens[as]}` } : {}),
         ...headers,
       },
@@ -514,9 +517,11 @@ async function main() {
     { code: 'SAVE5', name: { en: '5 off orders over 50' }, discountType: 'fixed_amount', scope: 'cart', value: 5, minPurchaseAmount: 50 },
     { code: 'DRINKS15', name: { en: '15% off beverages' }, discountType: 'percentage', scope: 'category', percentage: 15, applicableCategoryIds: [cat.BEV.id] },
     { code: 'AUDIO20', name: { en: 'Audio week: 20% off' }, discountType: 'percentage', scope: 'category', percentage: 20, applicableCategoryIds: [cat.AUDIO.id], maxDiscountAmount: 30, validTo: new Date(Date.now() + 7 * DAY).toISOString() },
-    { code: 'EXPIRED5', name: { en: 'Old spring promo' }, discountType: 'percentage', scope: 'cart', percentage: 5, validFrom: new Date(Date.now() - 90 * DAY).toISOString(), validTo: new Date(Date.now() - 30 * DAY).toISOString() },
+    { code: 'EXPIRED5', name: { en: 'Old spring promo' }, discountType: 'percentage', scope: 'cart', percentage: 5, validFrom: new Date(Date.now() - 90 * DAY).toISOString(), validTo: new Date(Date.now() + DAY).toISOString() },
   ];
   for (const d of discounts) await post('/discounts', d);
+  // The API refuses an end date in the past: the old promo is ended afterwards
+  await db.query(`UPDATE discounts SET "validTo" = now() - interval '30 days' WHERE "tenantId" = $1 AND code = 'EXPIRED5'`, [tenantId]);
   log(`2 price lists, ${discounts.length} discount codes`);
 
   // ===== Customers =====

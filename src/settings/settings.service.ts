@@ -77,6 +77,9 @@ export interface StoreSettings {
   maxDiscountPercent: number;
   // 'letter': US Letter invoice (same layout as A4)
   receiptFormat: '58mm' | '80mm' | 'a4' | 'letter';
+  // Paper of every other document (estimates, purchase orders, statements, report
+  // PDFs); receipts, credit notes and Z-reports follow receiptFormat
+  documentPaper: 'letter' | 'a4';
   heldCartExpiryHours: number;
   requireOpenShift: boolean;
   // Hour (branch time) at which the trading day starts: 4 = sales before 04:00
@@ -174,6 +177,7 @@ export const DEFAULT_SETTINGS: Omit<StoreSettings, 'storeName'> = {
   lowStockThreshold: 5,
   maxDiscountPercent: 20,
   receiptFormat: '80mm',
+  documentPaper: 'letter',
   heldCartExpiryHours: 24,
   requireOpenShift: false,
   businessDayCutoffHour: 0,

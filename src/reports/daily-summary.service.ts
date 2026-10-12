@@ -132,43 +132,47 @@ export class DailySummaryService {
       ].includes(c.key),
     );
 
-    const body = await pdfBuffer((doc) => {
-      pdfHeader(doc, header);
-      if (!summary.freshness.complete) {
+    const body = await pdfBuffer(
+      (doc) => {
+        pdfHeader(doc, header);
+        if (!summary.freshness.complete) {
+          doc
+            .font('Helvetica-Oblique')
+            .fontSize(8)
+            .fillColor('#9a3412')
+            .text(
+              `Figures may be incomplete: ${summary.freshness.pendingSales} sale(s) are still waiting on tills to upload.`,
+            )
+            .fillColor('#000000')
+            .moveDown(0.5);
+        }
+        pdfSection(doc, 'Sales and tax');
+        pdfTable(doc, salesColumns, salesRows, timezone);
+        pdfSection(doc, 'Tenders (net of change and refunds)');
+        pdfTable(doc, tenders.columns, tenders.rows, timezone);
+        pdfSection(doc, 'Cash variance by shift');
+        pdfTable(doc, shiftColumns, shifts.rows, timezone);
+        if (summary.cashVariance.length > 0) {
+          doc
+            .font('Helvetica-Bold')
+            .fontSize(9)
+            .text(
+              'Total cash variance of closed shifts: ' +
+                summary.cashVariance
+                  .map((v) => `${v.amount.toFixed(2)} ${v.currencyCode}`)
+                  .join(' · '),
+            );
+        }
         doc
-          .font('Helvetica-Oblique')
-          .fontSize(8)
-          .fillColor('#9a3412')
-          .text(
-            `Figures may be incomplete: ${summary.freshness.pendingSales} sale(s) are still waiting on tills to upload.`,
-          )
-          .fillColor('#000000')
-          .moveDown(0.5);
-      }
-      pdfSection(doc, 'Sales and tax');
-      pdfTable(doc, salesColumns, salesRows, timezone);
-      pdfSection(doc, 'Tenders (net of change and refunds)');
-      pdfTable(doc, tenders.columns, tenders.rows, timezone);
-      pdfSection(doc, 'Cash variance by shift');
-      pdfTable(doc, shiftColumns, shifts.rows, timezone);
-      if (summary.cashVariance.length > 0) {
-        doc
-          .font('Helvetica-Bold')
-          .fontSize(9)
-          .text(
-            'Total cash variance of closed shifts: ' +
-              summary.cashVariance
-                .map((v) => `${v.amount.toFixed(2)} ${v.currencyCode}`)
-                .join(' · '),
-          );
-      }
-      doc
-        .moveDown(1)
-        .font('Helvetica')
-        .fontSize(7)
-        .fillColor('#666666')
-        .text(`Generated ${summary.generatedAt}`);
-    }, header.title);
+          .moveDown(1)
+          .font('Helvetica')
+          .fontSize(7)
+          .fillColor('#666666')
+          .text(`Generated ${summary.generatedAt}`);
+      },
+      header.title,
+      header.paper,
+    );
 
     await this.auditService.record({
       tenantId,
