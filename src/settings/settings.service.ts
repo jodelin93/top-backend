@@ -58,7 +58,9 @@ export function normalizeExchangeRates(
         `The ${code} rate must be a positive number`,
       );
     }
-    rates[code] = Math.round(rate * 1_000_000) / 1_000_000;
+    // 12 significant digits: a gourde store keeps dollars per gourde (1 / 132.5),
+    // which must give 132.5 back when it is shown as gourdes per dollar
+    rates[code] = Number(rate.toPrecision(12));
   }
   return rates;
 }
