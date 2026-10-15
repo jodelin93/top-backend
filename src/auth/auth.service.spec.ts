@@ -1,6 +1,6 @@
 import { ALL_PERMISSIONS } from './permissions';
 import { TenantRole } from '../database/entities/tenant-role.entity';
-import { UnauthorizedException } from '@nestjs/common';
+import { ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
@@ -48,6 +48,7 @@ describe('AuthService', () => {
   const sessionsService = {
     newId: jest.fn(() => 'sid-1'),
     create: jest.fn(),
+    claimSingleSession: jest.fn(),
     setTenant: jest.fn(),
     revokeOwn: jest.fn(),
     revokeAllForUser: jest.fn(),
@@ -103,6 +104,19 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
+    it('refuses a user signed in on another device, before any second factor', async () => {
+      userRepository.findOne.mockResolvedValue(user({ mfaEnabled: true }));
+      sessionsService.claimSingleSession.mockRejectedValueOnce(
+        new ConflictException({ code: 'SESSION_ACTIVE' }),
+      );
+      await expect(
+        service.login('owner@example.com', 'Password123!'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(sessionsService.claimSingleSession).toHaveBeenCalledWith('u1');
+      expect(jwtService.sign).not.toHaveBeenCalled();
+      expect(sessionsService.create).not.toHaveBeenCalled();
+    });
+
     it('returns a full token and the user with their store role', async () => {
       userRepository.findOne.mockResolvedValue(user());
       const result = await service.login('owner@example.com', 'Password123!');

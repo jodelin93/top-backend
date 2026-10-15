@@ -6,7 +6,9 @@ import { AuditService } from '../audit/audit.service';
 import { SessionsService } from './sessions.service';
 import {
   SESSION_TOUCH_INTERVAL_MS,
+  SESSION_IN_USE_MS,
   sessionStatus,
+  sessionsForSignIn,
   shouldTouch,
 } from './session-state';
 
@@ -32,6 +34,43 @@ describe('session rules', () => {
     expect(
       shouldTouch(new Date(now.getTime() - SESSION_TOUCH_INTERVAL_MS), now),
     ).toBe(true);
+  });
+});
+
+describe('one signed-in device per user', () => {
+  const now = new Date('2026-10-15T12:00:00Z');
+  const seen = (msAgo: number) => new Date(now.getTime() - msAgo);
+
+  it('refuses a new sign-in while another device is in use', () => {
+    const other = { id: 's1', deviceId: 'till-1', lastSeenAt: seen(60_000) };
+    expect(sessionsForSignIn([other], 'till-2', now)).toEqual({
+      blocking: [other],
+      replaced: [],
+    });
+    expect(sessionsForSignIn([other], null, now)).toEqual({
+      blocking: [other],
+      replaced: [],
+    });
+  });
+
+  it('replaces the session of the same till and sessions left unused', () => {
+    const sameTill = { id: 's1', deviceId: 'till-1', lastSeenAt: seen(1000) };
+    const idle = {
+      id: 's2',
+      deviceId: null,
+      lastSeenAt: seen(SESSION_IN_USE_MS),
+    };
+    expect(sessionsForSignIn([sameTill, idle], 'till-1', now)).toEqual({
+      blocking: [],
+      replaced: [sameTill, idle],
+    });
+  });
+
+  it('lets the first sign-in through', () => {
+    expect(sessionsForSignIn([], null, now)).toEqual({
+      blocking: [],
+      replaced: [],
+    });
   });
 });
 

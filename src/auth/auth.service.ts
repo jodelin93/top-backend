@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -191,6 +192,9 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // One signed-in device per user: checked before the second factor too
+    await this.claimSingleSession(user);
+
     // If MFA is enabled, return a temporary token (no session until the code is
     // verified). It only opens /auth/mfa/verify and carries no profile data.
     if (user.mfaEnabled) {
@@ -247,6 +251,7 @@ export class AuthService {
     tenantId: string | null,
     authMethod: 'password' | 'mfa' | 'signup',
   ): Promise<LoginResponse> {
+    if (authMethod !== 'signup') await this.claimSingleSession(user);
     const info = await this.getUserInfo(user, tenantId);
     const sessionId = this.sessionsService.newId();
     const { accessToken, expiresAt } = this.signAccessToken(
@@ -615,6 +620,22 @@ export class AuthService {
         entityType: 'user',
         entityId: account.id,
       });
+    }
+  }
+
+  /** One signed-in device per user (refusals are audited) */
+  private async claimSingleSession(user: Pick<User, 'id'>): Promise<void> {
+    try {
+      await this.sessionsService.claimSingleSession(user.id);
+    } catch (err) {
+      if (err instanceof ConflictException) {
+        await this.auditAuthFailure(
+          user,
+          'auth.login_refused',
+          'signed_in_elsewhere',
+        );
+      }
+      throw err;
     }
   }
 

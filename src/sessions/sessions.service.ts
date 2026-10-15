@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -8,7 +9,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { IsNull, MoreThan, Not, Repository } from 'typeorm';
 import { UserSession } from './user-session.entity';
-import { SessionStatus, sessionStatus, shouldTouch } from './session-state';
+import {
+  SessionStatus,
+  sessionStatus,
+  sessionsForSignIn,
+  shouldTouch,
+} from './session-state';
 import { AuditService } from '../audit/audit.service';
 import { requestContext } from '../common/context/request-context';
 import { TenantMembership } from '../database/entities/tenant-membership.entity';
@@ -220,6 +226,52 @@ export class SessionsService {
     const ids = rows.map((r) => r.id);
     await this.markRevoked(ids, reason);
     return ids.length;
+  }
+
+  /**
+   * One signed-in device per user. Throws when the user is signed in on another
+   * device that is still in use (sign out there first, or a manager disconnects it);
+   * otherwise ends the user's sessions the new one replaces. Called with the password
+   * (or code) already checked.
+   */
+  async claimSingleSession(userId: string): Promise<void> {
+    const active = await this.sessionRepository.find({
+      select: {
+        id: true,
+        deviceId: true,
+        lastSeenAt: true,
+        userAgent: true,
+        tenantId: true,
+      },
+      where: { userId, revokedAt: IsNull(), expiresAt: MoreThan(new Date()) },
+      order: { lastSeenAt: 'DESC' },
+    });
+    // A session checked a moment ago may have a newer lastSeenAt in the cache
+    for (const session of active) {
+      const cached = this.cache.get(session.id);
+      if (cached && cached.lastSeenAt > session.lastSeenAt)
+        session.lastSeenAt = cached.lastSeenAt;
+    }
+    const { blocking, replaced } = sessionsForSignIn(
+      active,
+      requestContext.get()?.deviceId ?? null,
+    );
+    if (blocking.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        code: 'SESSION_ACTIVE',
+        message: 'This user is already signed in on another device',
+        device: {
+          userAgent: blocking[0].userAgent,
+          lastSeenAt: blocking[0].lastSeenAt,
+        },
+      });
+    }
+    await this.markRevoked(
+      replaced.map((s) => s.id),
+      'replaced_by_sign_in',
+    );
   }
 
   /** "Sign out everywhere else": every session except the caller's. */
