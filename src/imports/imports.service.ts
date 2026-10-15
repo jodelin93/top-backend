@@ -14,7 +14,13 @@ import { TaxCategory } from '../database/entities/tax-category.entity';
 import { ProductBarcode } from '../database/entities/product-barcode.entity';
 import { AuditService } from '../audit/audit.service';
 import { ProductBarcodesService } from '../products/product-barcodes.service';
-import { CsvFormatError, parseProductCsv, ProductCsvRow } from './product-csv';
+import {
+  CsvFormatError,
+  parseProductCsv,
+  parseProductRecords,
+  ProductCsvRow,
+} from './product-csv';
+import { isXlsx, readProductSheet } from './product-sheet';
 import { ExportProduct, toCsv, toXlsx } from './product-export';
 
 export type ImportAction = 'create' | 'update' | 'skip' | 'error';
@@ -169,7 +175,7 @@ export class ImportsService {
     file: Buffer,
     policy: ImportPolicy = DEFAULT_IMPORT_POLICY,
   ): Promise<ImportPreview> {
-    const { rows, unknownColumns } = this.parse(file);
+    const { rows, unknownColumns } = await this.parse(file);
     const planned = await this.plan(tenantId, rows, policy);
     return {
       totalRows: planned.length,
@@ -190,7 +196,7 @@ export class ImportsService {
     } = {},
   ): Promise<ImportResult> {
     const policy = options.policy ?? DEFAULT_IMPORT_POLICY;
-    const { rows } = this.parse(file);
+    const { rows } = await this.parse(file);
     const planned = await this.plan(tenantId, rows, policy);
     const invalid = planned.filter((r) => r.action === 'error');
     if (invalid.length && !options.skipInvalid) {
@@ -297,9 +303,12 @@ export class ImportsService {
     return result;
   }
 
-  private parse(file: Buffer) {
+  /** A CSV file, or the first sheet of an Excel workbook (.xlsx) */
+  private async parse(file: Buffer) {
     try {
-      return parseProductCsv(file);
+      return isXlsx(file)
+        ? parseProductRecords(await readProductSheet(file))
+        : parseProductCsv(file);
     } catch (error) {
       if (error instanceof CsvFormatError) {
         throw new BadRequestException(error.message);

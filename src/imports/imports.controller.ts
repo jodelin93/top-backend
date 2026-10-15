@@ -4,7 +4,6 @@ import {
   Body,
   Controller,
   Get,
-  Header,
   HttpCode,
   HttpStatus,
   Post,
@@ -34,6 +33,8 @@ import {
   ImportsService,
 } from './imports.service';
 import { MAX_IMPORT_BYTES, PRODUCT_CSV_TEMPLATE } from './product-csv';
+import { isOldExcel, isXlsx, templateXlsx } from './product-sheet';
+import { parse } from 'csv-parse/sync';
 import { UserThrottle } from '../common/throttle/user-throttle.decorator';
 
 /** Upsert policy chosen at import time (multipart fields arrive as strings) */
@@ -77,9 +78,16 @@ const csvBody = {
 
 function requireFile(file: Express.Multer.File | undefined): Buffer {
   if (!file?.buffer?.length) {
-    throw new BadRequestException('Choose a CSV file to import');
+    throw new BadRequestException('Choose a CSV or Excel file to import');
   }
-  // Binary files (spreadsheets, images) are not CSV
+  // Excel workbooks (.xlsx) are read; the old .xls format is not
+  if (isXlsx(file.buffer)) return file.buffer;
+  if (isOldExcel(file.buffer)) {
+    throw new BadRequestException(
+      'This is an old Excel file (.xls). Save it as Excel Workbook (.xlsx) or CSV first.',
+    );
+  }
+  // Other binary files (images, documents) are not CSV
   if (file.buffer.subarray(0, 8192).includes(0)) {
     throw new BadRequestException(
       'This is not a CSV file. Save the spreadsheet as CSV (UTF-8) first.',
@@ -97,15 +105,27 @@ function requireFile(file: Express.Multer.File | undefined): Buffer {
 export class ImportsController {
   constructor(private imports: ImportsService) {}
 
-  /** GET /imports/products/template: CSV with the header and two example rows */
+  /**
+   * GET /imports/products/template?format=csv|xlsx: the header and two example
+   * rows, as CSV or as an Excel workbook
+   */
   @Get('template')
-  @Header('Content-Type', 'text/csv; charset=utf-8')
-  @Header(
-    'Content-Disposition',
-    'attachment; filename="products-import-template.csv"',
-  )
-  template(): string {
-    return PRODUCT_CSV_TEMPLATE;
+  async template(
+    @Query() query: ExportProductsQueryDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const excel = query.format === 'xlsx';
+    res.set({
+      'Content-Type': excel
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="products-import-template.${excel ? 'xlsx' : 'csv'}"`,
+    });
+    return new StreamableFile(
+      excel
+        ? await templateXlsx(parse(PRODUCT_CSV_TEMPLATE))
+        : Buffer.from(PRODUCT_CSV_TEMPLATE, 'utf8'),
+    );
   }
 
   /**

@@ -92,6 +92,14 @@ export function parseProductCsv(input: Buffer | string): ParsedProductCsv {
       `Could not read the CSV file: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  return parseProductRecords(records);
+}
+
+/**
+ * Validate rows already split into cells (a CSV file or an Excel sheet): header,
+ * columns and every row.
+ */
+export function parseProductRecords(records: string[][]): ParsedProductCsv {
   if (records.length === 0) {
     throw new CsvFormatError('The file is empty');
   }
