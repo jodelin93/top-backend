@@ -184,7 +184,7 @@ export const DEFAULT_SETTINGS: Omit<StoreSettings, 'storeName'> = {
   documentPaper: 'letter',
   receiptNameSource: 'store',
   heldCartExpiryHours: 24,
-  requireOpenShift: false,
+  requireOpenShift: true,
   businessDayCutoffHour: 0,
   allowZeroValueSales: false,
   returnWindowDays: 30,
