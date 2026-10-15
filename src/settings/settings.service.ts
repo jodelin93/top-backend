@@ -82,6 +82,8 @@ export interface StoreSettings {
   // Paper of every other document (estimates, purchase orders, statements, report
   // PDFs); receipts, credit notes and Z-reports follow receiptFormat
   documentPaper: 'letter' | 'a4';
+  // Name in the receipt header: the store's or the selling branch's
+  receiptNameSource: 'store' | 'branch';
   heldCartExpiryHours: number;
   requireOpenShift: boolean;
   // Hour (branch time) at which the trading day starts: 4 = sales before 04:00
@@ -180,6 +182,7 @@ export const DEFAULT_SETTINGS: Omit<StoreSettings, 'storeName'> = {
   maxDiscountPercent: 20,
   receiptFormat: '80mm',
   documentPaper: 'letter',
+  receiptNameSource: 'store',
   heldCartExpiryHours: 24,
   requireOpenShift: false,
   businessDayCutoffHour: 0,

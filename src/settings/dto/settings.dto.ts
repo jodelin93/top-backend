@@ -89,6 +89,10 @@ export class UpdateStoreSettingsDto {
     '58mm' | '80mm' | 'a4' | 'letter';
   // Paper of estimates, purchase orders, statements and report PDFs
   @IsIn(['letter', 'a4']) @IsOptional() documentPaper?: 'letter' | 'a4';
+  // Name in the receipt header: the store's, or the branch that made the sale
+  // (when the logo already names the company)
+  @IsIn(['store', 'branch']) @IsOptional() receiptNameSource?:
+    'store' | 'branch';
   // Held carts (and their stock reservations) expire after this many hours
   @IsNumber() @IsOptional() @Min(1) @Max(168) heldCartExpiryHours?: number;
   // Selling needs an open shift on the register

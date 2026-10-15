@@ -429,9 +429,18 @@ export class DocumentDeliveriesService {
   ): Promise<ReceiptView> {
     const settings = await this.settingsService.getSettings(tenantId);
     // Frozen seller identity; sales from before snapshots use today's settings
-    const seller =
+    const snapshot =
       sale.documentSnapshot ??
       (sale.branch ? buildDocumentSnapshot(settings, sale.branch) : null);
+    // The selling branch's name in the header when the store chose it
+    const branchName =
+      settings.receiptNameSource === 'branch'
+        ? (sale.documentSnapshot?.branch?.name ?? sale.branch?.name)
+        : null;
+    const seller =
+      snapshot && branchName
+        ? { ...snapshot, storeName: branchName }
+        : snapshot;
     const lang = settings.language === 'fr' ? 'fr' : 'en';
     const paid = (sale.payments ?? []).filter(
       (p) => !['failed', 'cancelled'].includes(String(p.status)),
