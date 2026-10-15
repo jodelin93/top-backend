@@ -95,6 +95,7 @@ export class ReorderService {
        JOIN products p ON p.id = v."productId" AND p."tenantId" = v."tenantId"
        WHERE v."tenantId" = $1
          AND v.status = 'active' AND p.status = 'active'
+         AND p."isStockTracked"
          AND p."reorderPoint" IS NOT NULL
        ORDER BY v.sku
        LIMIT 5000`,

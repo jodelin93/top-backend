@@ -229,9 +229,21 @@ export class ProductsService {
       );
 
     if (filters?.categoryId) {
-      query.andWhere('product.categoryId = :categoryId', {
-        categoryId: filters.categoryId,
-      });
+      // The category and every category under it (a parent holds no products
+      // of its own in most catalogs)
+      query.andWhere(
+        `product.categoryId IN (
+          WITH RECURSIVE tree AS (
+            SELECT c.id FROM categories c
+             WHERE c.id = :categoryId AND c."tenantId" = :tenantId
+            UNION
+            SELECT c.id FROM categories c
+              JOIN tree ON c."parentId" = tree.id
+             WHERE c."tenantId" = :tenantId
+          )
+          SELECT id FROM tree)`,
+        { categoryId: filters.categoryId },
+      );
     }
 
     if (filters?.taxCategoryId) {

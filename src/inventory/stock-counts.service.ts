@@ -210,6 +210,8 @@ export class StockCountsService {
       )
       .where('variant."tenantId" = :tenantId', { tenantId })
       .andWhere("variant.status != 'discontinued'")
+      // Nothing to count for products sold without stock (services...)
+      .andWhere('product."isStockTracked" = true')
       .limit(MAX_COUNT_LINES + 1);
     if (dto.categoryId) {
       qb.innerJoin(

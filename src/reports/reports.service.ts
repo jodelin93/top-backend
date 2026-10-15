@@ -279,6 +279,7 @@ export class ReportsService {
                 COALESCE(p."reorderPoint", $7::int) AS "reorderPoint"
          FROM product_variants v JOIN products p ON p.id = v."productId"
          WHERE v."tenantId" = $1 AND v.status = 'active' AND p.status = 'active'
+           AND p."isStockTracked"
        ) low WHERE low."onHand" <= low."reorderPoint"`,
     );
 

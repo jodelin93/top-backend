@@ -894,6 +894,8 @@ export class InventoryService {
       )
       .where('variant.tenantId = :tenantId', { tenantId })
       .andWhere("variant.status != 'discontinued'")
+      // Services and other products sold without stock have no inventory
+      .andWhere('product.isStockTracked = true')
       .orderBy('product.name', 'ASC')
       .addOrderBy('variant.sku', 'ASC')
       .limit(1000);

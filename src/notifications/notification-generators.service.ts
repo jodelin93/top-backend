@@ -67,6 +67,7 @@ export async function findLowStock(
        LEFT JOIN inventory_locations l ON l.id = sl."locationId"
       WHERE sl."tenantId" = $1
         AND v.status = 'active'
+        AND p."isStockTracked"
         AND COALESCE(NULLIF(v."minStockLevel", 0), $2::numeric) > 0
         AND sl."quantityAvailable" <= COALESCE(NULLIF(v."minStockLevel", 0), $2::numeric)
         AND ($3::uuid IS NULL OR sl."locationId" = $3)
