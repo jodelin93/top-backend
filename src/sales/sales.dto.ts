@@ -186,6 +186,8 @@ export class ListSalesQueryDto {
   @IsUUID() @IsOptional() customerId?: string;
   @IsUUID() @IsOptional() registerId?: string;
   @IsUUID() @IsOptional() salespersonId?: string;
+  // The cashier who rang the sale up
+  @IsUUID() @IsOptional() userId?: string;
   @IsString() @IsOptional() @MaxLength(100) search?: string;
   @Type(() => Number) @IsInt() @Min(1) @IsOptional() page?: number;
   @Type(() => Number) @IsInt() @Min(1) @Max(100) @IsOptional() limit?: number;

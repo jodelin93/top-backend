@@ -1353,6 +1353,9 @@ export class SalesService implements OnModuleInit {
         salespersonId: query.salespersonId,
       });
     }
+    if (query.userId) {
+      qb.andWhere('sale.userId = :userId', { userId: query.userId });
+    }
     if (query.search) {
       // Final number or the provisional OFFLINE-… number printed on the receipt
       qb.andWhere(
@@ -1366,6 +1369,40 @@ export class SalesService implements OnModuleInit {
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit);
+  }
+
+  /**
+   * The people who rang up sales (cashiers), for the sales list filter: id and
+   * name only, from the sales the user may see
+   */
+  async cashiers(tenantId: string): Promise<{ id: string; name: string }[]> {
+    const qb = this.saleRepository
+      .createQueryBuilder('sale')
+      .innerJoin('sale.user', 'user')
+      .select('user.id', 'id')
+      .addSelect('user.firstName', 'firstName')
+      .addSelect('user.lastName', 'lastName')
+      .addSelect('user.email', 'email')
+      .where('sale.tenantId = :tenantId', { tenantId })
+      .groupBy('user.id')
+      .addGroupBy('user.firstName')
+      .addGroupBy('user.lastName')
+      .addGroupBy('user.email');
+    const scope = branchFilterSql('sale');
+    if (scope) qb.andWhere(scope.sql, scope.params);
+    const rows = await qb.getRawMany<{
+      id: string;
+      firstName: string | null;
+      lastName: string | null;
+      email: string;
+    }>();
+    return rows
+      .map((r) => ({
+        id: r.id,
+        name:
+          [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || r.email,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /**

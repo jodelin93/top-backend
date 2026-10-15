@@ -49,6 +49,16 @@ export class SalesController {
   /**
    * GET /sales?from=&to=&status=&customerId=&registerId=&search=&page=&limit=
    */
+  /**
+   * Cashiers who rang up sales (id and name), for the sales list filter
+   * GET /sales/cashiers
+   */
+  @Get('cashiers')
+  @RequirePermissions('sales.view')
+  cashiers(@CurrentTenant() tenantId: string) {
+    return this.salesService.cashiers(tenantId);
+  }
+
   @Get()
   @RequirePermissions('sales.view')
   findAll(
