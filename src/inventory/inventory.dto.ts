@@ -27,6 +27,8 @@ import { StockTransferStatus } from '../database/entities/stock-transfer.entity'
 export class StockQueryDto {
   @IsString() @IsOptional() @MaxLength(100) search?: string;
   @IsUUID() @IsOptional() locationId?: string;
+  // One product variant (e.g. opened from a low-stock notification)
+  @IsUUID() @IsOptional() variantId?: string;
   // Only rows at or below the store's low-stock threshold
   // (explicit transform: implicit conversion would turn "false" into true)
   @Transform(({ value }) => value === true || value === 'true')

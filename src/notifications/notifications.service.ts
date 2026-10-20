@@ -200,7 +200,7 @@ export class NotificationsService {
               CASE WHEN ${UNREAD} THEN NULL ELSE COALESCE(r."readAt", n."readAt") END AS "readAt",
               CASE WHEN ${UNREAD} THEN NULL
                    WHEN r."readAt" IS NOT NULL THEN r."userId" ELSE n."readById" END AS "readById",
-              n."createdAt", n."recipientUserId", n."branchId"
+              n."createdAt", n."recipientUserId", n."branchId", n."locationId"
          FROM notifications n ${READ_JOIN}
         WHERE ${where}
         ORDER BY (${UNREAD}) DESC, n."lastOccurredAt" DESC

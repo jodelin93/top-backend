@@ -919,6 +919,9 @@ export class InventoryService {
         sellable: LocationStockStatus.SELLABLE,
       });
     }
+    if (query.variantId) {
+      qb.andWhere('variant.id = :variantId', { variantId: query.variantId });
+    }
     if (query.search) {
       qb.andWhere(
         '(variant.sku ILIKE :search OR variant.barcode ILIKE :search OR product.name::text ILIKE :search)',
