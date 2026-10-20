@@ -22,10 +22,13 @@ import {
 } from './auth.service';
 import {
   ChangePasswordDto,
+  ForgotPasswordDto,
   LoginDto,
   MfaTokenDto,
+  ResetPasswordWithTokenDto,
   SwitchStoreDto,
 } from './dto';
+import { PasswordResetService } from './password-reset.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { MfaGuard } from './guards/mfa.guard';
 import { PermissionsGuard } from './guards/permissions.guard';
@@ -54,7 +57,10 @@ type SessionResponse = Omit<LoginResponse, 'accessToken'> & {
 @ApiBearerAuth('JWT-auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private passwordResetService: PasswordResetService,
+  ) {}
 
   /**
    * Login endpoint
@@ -79,6 +85,40 @@ export class AuthController {
     return response.requiresMfa
       ? deliverMfaPending(req, res, response)
       : deliverSession(req, res, response);
+  }
+
+  /**
+   * Forgot password: e-mails a link to choose a new one
+   * POST /auth/password/forgot
+   * Same answer whether the account exists or not
+   */
+  @Public()
+  @AuthThrottle()
+  @Post('password/forgot')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+    @Req() req: Request,
+  ): Promise<void> {
+    await this.passwordResetService.request(
+      dto.email,
+      dto.language,
+      req.ip ?? null,
+    );
+  }
+
+  /**
+   * New password from an e-mailed link (single use); signs out every session
+   * POST /auth/password/reset
+   */
+  @Public()
+  @AuthThrottle()
+  @Post('password/reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async resetPasswordWithToken(
+    @Body() dto: ResetPasswordWithTokenDto,
+  ): Promise<void> {
+    await this.passwordResetService.reset(dto.token, dto.newPassword);
   }
 
   /**

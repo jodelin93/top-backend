@@ -6,6 +6,7 @@ import type { JwtPayload } from './auth.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { ApprovalsService } from '../approvals/approvals.service';
+import { PasswordResetService } from './password-reset.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -18,6 +19,7 @@ describe('AuthController', () => {
     switchStore: jest.fn(),
     logout: jest.fn(),
   };
+  const passwordResetService = { request: jest.fn(), reset: jest.fn() };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -25,6 +27,7 @@ describe('AuthController', () => {
       controllers: [AuthController],
       providers: [
         { provide: AuthService, useValue: authService },
+        { provide: PasswordResetService, useValue: passwordResetService },
         // Needed by MfaGuard, which is instantiated with the controller
         { provide: JwtService, useValue: {} },
         // Needed by PermissionsGuard (approval tokens)
@@ -230,5 +233,28 @@ describe('AuthController', () => {
       sessionId: 's1',
     });
     expect(authService.getUserInfo).toHaveBeenCalledWith(user, 't1');
+  });
+
+  it('asks for a reset link with the email, language and client IP', async () => {
+    await controller.forgotPassword({ email: 'a@b.com', language: 'fr' }, {
+      ip: '1.2.3.4',
+    } as unknown as Request);
+    expect(passwordResetService.request).toHaveBeenCalledWith(
+      'a@b.com',
+      'fr',
+      '1.2.3.4',
+    );
+  });
+
+  it('sets the new password from the link token', async () => {
+    const token = 'x'.repeat(43);
+    await controller.resetPasswordWithToken({
+      token,
+      newPassword: 'NewPass123',
+    });
+    expect(passwordResetService.reset).toHaveBeenCalledWith(
+      token,
+      'NewPass123',
+    );
   });
 });

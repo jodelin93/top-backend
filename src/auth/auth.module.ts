@@ -5,6 +5,7 @@ import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthService } from './auth.service';
+import { PasswordResetService } from './password-reset.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { LocalStrategy } from './strategies/local.strategy';
@@ -36,6 +37,7 @@ import { SensitiveFieldsInterceptor } from './sensitive-fields.interceptor';
   ],
   providers: [
     AuthService,
+    PasswordResetService,
     JwtStrategy,
     LocalStrategy,
     // Costs and customer balances only for those allowed to see them
