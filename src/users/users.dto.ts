@@ -15,8 +15,11 @@ export class CreateMemberDto {
   @IsEmail() @MaxLength(255) email: string;
   @IsString() @IsOptional() @MaxLength(100) firstName?: string;
   @IsString() @IsOptional() @MaxLength(100) lastName?: string;
-  // Required when the email doesn't belong to an existing user
+  // Only when e-mails can't be sent: otherwise a new user chooses their own
+  // password through an e-mailed link (which confirms the address)
   @IsString() @IsOptional() @MinLength(8) @MaxLength(128) password?: string;
+  // Language of that e-mail (the admin's screen language)
+  @IsString() @IsOptional() @MaxLength(5) language?: string;
   // Key of one of the store's roles (built-in or custom)
   @IsString() @MaxLength(50) role: string;
   // Branches the member works in; null or absent = every branch (spec §9)
@@ -45,4 +48,9 @@ export class UpdateMemberDto {
 
 export class ResetPasswordDto {
   @IsString() @MinLength(8) @MaxLength(128) password: string;
+}
+
+export class SetupLinkDto {
+  // Language of the e-mail (the admin's screen language)
+  @IsString() @IsOptional() @MaxLength(5) language?: string;
 }

@@ -25,8 +25,10 @@ import { passwordResetEmail, resetLanguage } from './password-reset-email';
 export const RESET_LINK_MINUTES = 30;
 // At most this many links per account per hour (the endpoint is also limited per IP)
 export const MAX_LINKS_PER_HOUR = 3;
+// A new account's "choose your password" link (see UsersService) works this long
+export const SETUP_LINK_HOURS = 72;
 
-const hashToken = (token: string) =>
+export const hashToken = (token: string) =>
   createHash('sha256').update(token, 'utf8').digest('hex');
 
 export const INVALID_RESET_LINK =
@@ -144,9 +146,11 @@ export class PasswordResetService {
     if (!row) throw new BadRequestException(INVALID_RESET_LINK);
 
     const passwordHash = await this.authService.hashPassword(newPassword);
+    // The link came from their mailbox: the e-mail address is confirmed
     const updated = returnedRows<{ id: string }>(
       await this.dataSource.query(
-        `UPDATE users SET "passwordHash" = $2, "failedLoginCount" = 0, "lockedUntil" = NULL
+        `UPDATE users SET "passwordHash" = $2, "failedLoginCount" = 0, "lockedUntil" = NULL,
+                "passwordSetupPending" = false, "emailVerifiedAt" = coalesce("emailVerifiedAt", now())
           WHERE id = $1 AND status = $3
           RETURNING id`,
         [row.userId, passwordHash, UserStatus.ACTIVE],

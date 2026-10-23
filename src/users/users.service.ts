@@ -2,10 +2,15 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, In, Not, Repository } from 'typeorm';
@@ -33,12 +38,27 @@ import { AuditService } from '../audit/audit.service';
 import { SessionsService } from '../sessions/sessions.service';
 import { OutboxService } from '../platform/outbox/outbox.service';
 import { CreateMemberDto, UpdateMemberDto } from './users.dto';
+import {
+  EMAIL_CHANNEL,
+  type EmailChannel,
+} from '../notifications/email/email-channel';
+import {
+  hashToken,
+  MAX_LINKS_PER_HOUR,
+  SETUP_LINK_HOURS,
+} from '../auth/password-reset.service';
+import { accountSetupEmail } from '../auth/account-setup-email';
+import { maskEmailsIn } from '../documents/print-job-rules';
 
 export interface Member {
   id: string;
   email: string;
   firstName: string | null;
   lastName: string | null;
+  // Added by the store and has not opened the "choose your password" link yet
+  passwordSetupPending: boolean;
+  // Opened a link from their mailbox (setup or password reset)
+  emailVerified: boolean;
   mfaEnabled: boolean;
   lastLoginAt: Date | null;
   role: string;
@@ -53,6 +73,8 @@ export interface Member {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     @InjectRepository(TenantMembership)
     private membershipRepository: Repository<TenantMembership>,
@@ -66,7 +88,110 @@ export class UsersService {
     @Optional() private sessionsService?: SessionsService,
     // Domain events (user.role_changed); optional for unit tests
     @Optional() private outbox?: OutboxService,
+    // The "choose your password" e-mail; optional for unit tests
+    @Optional() @Inject(EMAIL_CHANNEL) private email?: EmailChannel,
   ) {}
+
+  private appUrl(): string | null {
+    const url =
+      this.configService.get<string>('APP_URL') ||
+      this.configService.get<string>('FRONTEND_URL') ||
+      process.env.APP_URL ||
+      process.env.FRONTEND_URL;
+    return url ? url.replace(/\/+$/, '') : null;
+  }
+
+  /** Can new users get their "choose your password" link by e-mail? */
+  private canEmailLinks(): boolean {
+    return !!this.email?.enabled && !!this.appUrl();
+  }
+
+  /**
+   * E-mails a single-use link to choose a password (and confirm the address).
+   * It replaces the person's unused links; at most MAX_LINKS_PER_HOUR an hour.
+   */
+  private async sendSetupLink(
+    tenantId: string,
+    userId: string,
+    language: unknown,
+  ): Promise<void> {
+    const appUrl = this.appUrl();
+    if (!this.email?.enabled || !appUrl) {
+      throw new BadRequestException(
+        'E-mail sending is not set up, so no link can be sent',
+      );
+    }
+    const [{ recent }] = await this.dataSource.query<{ recent: number }[]>(
+      `SELECT count(*)::int AS recent FROM password_reset_tokens
+        WHERE "userId" = $1 AND "createdAt" > now() - interval '1 hour'`,
+      [userId],
+    );
+    if (recent >= MAX_LINKS_PER_HOUR) {
+      throw new HttpException(
+        'Several links were sent in the last hour. Try again later.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    const [user] = await this.dataSource.query<
+      { email: string; firstName: string | null }[]
+    >(`SELECT email, "firstName" FROM users WHERE id = $1`, [userId]);
+    const [store] = await this.dataSource.query<{ name: string }[]>(
+      `SELECT name FROM tenants WHERE id = $1`,
+      [tenantId],
+    );
+    const token = randomBytes(32).toString('base64url');
+    await this.dataSource.query(
+      `DELETE FROM password_reset_tokens WHERE "userId" = $1 AND "usedAt" IS NULL`,
+      [userId],
+    );
+    await this.dataSource.query(
+      `INSERT INTO password_reset_tokens ("userId", "tokenHash", "expiresAt", purpose)
+       VALUES ($1, $2, now() + make_interval(hours => $3), 'setup')`,
+      [userId, hashToken(token), SETUP_LINK_HOURS],
+    );
+    const message = accountSetupEmail({
+      link: `${appUrl}/auth/reset-password?token=${token}&setup=1`,
+      firstName: user?.firstName,
+      storeName: store?.name ?? null,
+      language,
+      hours: SETUP_LINK_HOURS,
+    });
+    try {
+      await this.email.send({ to: user.email, ...message });
+    } catch (error) {
+      this.logger.warn(
+        `Could not e-mail an account setup link: ${maskEmailsIn(error instanceof Error ? error.message : String(error))}`,
+      );
+      throw new HttpException(
+        'The e-mail could not be sent. Check the address, then send the link again.',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+  }
+
+  /** POST /users/:userId/setup-link: the "choose your password" link again */
+  async resendSetupLink(
+    tenantId: string,
+    actor: AuthUser,
+    userId: string,
+    language: unknown,
+  ): Promise<void> {
+    const membership = await this.getMembership(tenantId, userId);
+    await this.assertCanManageMember(tenantId, actor, membership.role);
+    this.assertCanManageBranches(actor, membership);
+    if (!membership.user.passwordSetupPending) {
+      throw new ConflictException(
+        'This person has already chosen their password',
+      );
+    }
+    await this.sendSetupLink(tenantId, userId, language);
+    await this.auditService.record({
+      tenantId,
+      action: 'user.setup_link_sent',
+      entityType: 'user',
+      entityId: userId,
+    });
+  }
 
   async findAll(tenantId: string): Promise<Member[]> {
     const memberships = await this.membershipRepository.find({
@@ -101,6 +226,9 @@ export class UsersService {
       dto.branchIds === undefined ? branchScope(actor) : dto.branchIds,
     );
     const email = dto.email.trim().toLowerCase();
+    const byLink = this.canEmailLinks();
+    // The new account (not an existing one invited here)
+    let created: string | null = null;
 
     const membershipId = await this.dataSource.transaction(async (manager) => {
       let user = await manager.findOne(User, { where: { email } });
@@ -110,7 +238,10 @@ export class UsersService {
       const invited = !!user;
 
       if (!user) {
-        if (!dto.password) {
+        // The person chooses their own password from a link e-mailed to them
+        // (confirming the address); until then the account can't be used.
+        // Without e-mail sending (local work), the password typed here is used.
+        if (!byLink && !dto.password) {
           throw new BadRequestException(
             'A password is required for a new user',
           );
@@ -120,10 +251,14 @@ export class UsersService {
             email,
             firstName: dto.firstName,
             lastName: dto.lastName,
-            passwordHash: await this.hash(dto.password),
+            passwordHash: await this.hash(
+              byLink ? randomBytes(32).toString('base64url') : dto.password!,
+            ),
+            passwordSetupPending: byLink,
             status: UserStatus.ACTIVE,
           }),
         );
+        created = user.id;
       }
 
       const existing = await manager.findOne(TenantMembership, {
@@ -156,6 +291,10 @@ export class UsersService {
       );
       return membership.id;
     });
+    // The link goes out once the account exists; a failure is reported (the
+    // member is kept: "send the link again" from the list)
+    if (created && byLink)
+      await this.sendSetupLink(tenantId, created, dto.language);
 
     return this.toMember(
       await this.getMembershipById(tenantId, membershipId),
@@ -333,6 +472,12 @@ export class UsersService {
     const membership = await this.getMembership(tenantId, userId);
     if (membership.role === OWNER_ROLE && actor.role !== OWNER_ROLE) {
       throw new ForbiddenException("Only owners can reset an owner's password");
+    }
+    // Their e-mail is confirmed by choosing the password from the link
+    if (membership.user.passwordSetupPending) {
+      throw new ConflictException(
+        'This person has not chosen a password yet: send them the link again',
+      );
     }
     // Taking over a more powerful account would be a way around the role limits
     await this.assertCanManageMember(tenantId, actor, membership.role);
@@ -530,6 +675,8 @@ export class UsersService {
       email: m.user.email,
       firstName: m.user.firstName ?? null,
       lastName: m.user.lastName ?? null,
+      passwordSetupPending: !!m.user.passwordSetupPending,
+      emailVerified: !!m.user.emailVerifiedAt,
       mfaEnabled: m.user.mfaEnabled,
       lastLoginAt: m.user.lastLoginAt ?? null,
       role: m.role,

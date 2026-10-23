@@ -19,6 +19,8 @@ import {
 } from '../database/entities/tenant-membership.entity';
 import { AuthUser } from '../auth/strategies/jwt.strategy';
 import { UsersService } from './users.service';
+import { EMAIL_CHANNEL } from '../notifications/email/email-channel';
+import { hashToken } from '../auth/password-reset.service';
 import { SYSTEM_ROLES } from '../auth/permissions';
 import { resolvePermissions } from '../roles/role-permissions';
 
@@ -496,6 +498,151 @@ describe('UsersService', () => {
       await expect(
         bcrypt.compare('Password123!', data.passwordHash),
       ).resolves.toBe(true);
+    });
+  });
+  describe('choose-your-password link (e-mail sending on)', () => {
+    const email = {
+      enabled: true,
+      send: jest.fn<Promise<void>, [unknown]>(() => Promise.resolve()),
+    };
+    const query = jest.fn((sql: string) => {
+      if (sql.includes('count(*)')) return Promise.resolve([{ recent: 0 }]);
+      if (sql.includes('FROM users'))
+        return Promise.resolve([
+          { email: 'new@example.com', firstName: 'Ana' },
+        ]);
+      if (sql.includes('FROM tenants'))
+        return Promise.resolve([{ name: 'Top Service' }]);
+      return Promise.resolve([]);
+    });
+    let linked: UsersService;
+
+    beforeEach(async () => {
+      const module = await Test.createTestingModule({
+        providers: [
+          {
+            provide: RolesService,
+            useValue: {
+              findByKey: jest.fn((_t: string, key: string) =>
+                Promise.resolve({
+                  key,
+                  name: key,
+                  permissions: [
+                    ...SYSTEM_ROLES[key as keyof typeof SYSTEM_ROLES]
+                      .permissions,
+                  ],
+                }),
+              ),
+              findAll: jest.fn(() => Promise.resolve([])),
+            },
+          },
+          { provide: AuditService, useValue: { record: jest.fn() } },
+          UsersService,
+          {
+            provide: getRepositoryToken(TenantMembership),
+            useValue: membershipRepository,
+          },
+          { provide: getRepositoryToken(User), useValue: userRepository },
+          {
+            provide: ConfigService,
+            useValue: {
+              get: (k: string) => (k === 'APP_URL' ? 'https://pos.test/' : '4'),
+            },
+          },
+          { provide: DataSource, useValue: { ...dataSource, query } },
+          { provide: EMAIL_CHANNEL, useValue: email },
+        ],
+      }).compile();
+      linked = module.get(UsersService);
+    });
+
+    it('creates the account without a usable password and e-mails a single-use link', async () => {
+      manager.findOne.mockResolvedValue(null);
+      membershipRepository.findOneOrFail.mockResolvedValue(
+        membership('new-id', MembershipRole.CASHIER),
+      );
+      await linked.create(TENANT, actor('owner', MembershipRole.OWNER), {
+        email: 'New@Example.com',
+        firstName: 'Ana',
+        password: 'Typed-by-admin-1',
+        role: MembershipRole.CASHIER,
+        language: 'fr',
+      });
+      const savedUser = manager.save.mock.calls[0][0] as {
+        passwordHash: string;
+        passwordSetupPending: boolean;
+      };
+      expect(savedUser.passwordSetupPending).toBe(true);
+      // What the admin typed is not the password
+      await expect(
+        bcrypt.compare('Typed-by-admin-1', savedUser.passwordHash),
+      ).resolves.toBe(false);
+      const sent = email.send.mock.calls[0][0] as {
+        to: string;
+        subject: string;
+        text: string;
+      };
+      expect(sent.to).toBe('new@example.com');
+      expect(sent.subject).toContain('Top Service');
+      expect(sent.subject).toContain('mot de passe');
+      const link =
+        /https:\/\/pos\.test\/auth\/reset-password\?token=([\w-]+)&setup=1/.exec(
+          sent.text,
+        );
+      expect(link).not.toBeNull();
+      // Only the token's hash is stored, as a 72-hour setup link
+      const insert = query.mock.calls.find(([sql]) =>
+        String(sql).includes('INSERT INTO password_reset_tokens'),
+      ) as unknown as [string, unknown[]];
+      expect(insert[0]).toContain("'setup'");
+      expect(insert[1]).toEqual(['new-id', hashToken(link![1]), 72]);
+    });
+
+    it('sends the link again only to someone who has not chosen a password', async () => {
+      membershipRepository.findOne.mockResolvedValue({
+        ...membership('u1', MembershipRole.CASHIER),
+        user: {
+          id: 'u1',
+          email: 'u1@example.com',
+          passwordSetupPending: false,
+        },
+      });
+      await expect(
+        linked.resendSetupLink(
+          TENANT,
+          actor('owner', MembershipRole.OWNER),
+          'u1',
+          'en',
+        ),
+      ).rejects.toThrow(ConflictException);
+      membershipRepository.findOne.mockResolvedValue({
+        ...membership('u1', MembershipRole.CASHIER),
+        user: { id: 'u1', email: 'u1@example.com', passwordSetupPending: true },
+      });
+      await linked.resendSetupLink(
+        TENANT,
+        actor('owner', MembershipRole.OWNER),
+        'u1',
+        'en',
+      );
+      expect(email.send).toHaveBeenCalled();
+    });
+
+    it('does not let an admin set the password of someone who has not confirmed their e-mail', async () => {
+      membershipRepository.findOne.mockResolvedValue({
+        ...membership('u1', MembershipRole.CASHIER),
+        user: { id: 'u1', email: 'u1@example.com', passwordSetupPending: true },
+      });
+      membershipRepository.count.mockResolvedValue(0);
+      await expect(
+        linked.resetPassword(
+          TENANT,
+          actor('owner', MembershipRole.OWNER),
+          'u1',
+          'Password123!',
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(userRepository.update).not.toHaveBeenCalled();
     });
   });
 });

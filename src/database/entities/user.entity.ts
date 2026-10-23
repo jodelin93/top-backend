@@ -20,6 +20,14 @@ export class User extends BaseEntity {
   @Exclude()
   passwordHash: string;
 
+  // Added by a store: no usable password until they open the e-mailed link
+  @Column({ type: 'boolean', default: false })
+  passwordSetupPending: boolean;
+
+  // A link from their mailbox was opened (account setup or password reset)
+  @Column({ type: 'timestamptz', nullable: true })
+  emailVerifiedAt: Date | null;
+
   @Column({ type: 'varchar', length: 100, nullable: true })
   firstName: string;
 

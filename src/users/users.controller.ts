@@ -21,6 +21,7 @@ import { UsersService } from './users.service';
 import {
   CreateMemberDto,
   ResetPasswordDto,
+  SetupLinkDto,
   UpdateMemberDto,
 } from './users.dto';
 
@@ -54,6 +55,23 @@ export class UsersController {
     @Body() dto: UpdateMemberDto,
   ) {
     return this.usersService.update(tenantId, actor, userId, dto);
+  }
+
+  /** The "choose your password" link again, for someone who has not used it */
+  @Post(':userId/setup-link')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  resendSetupLink(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() actor: AuthUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+    @Body() dto: SetupLinkDto,
+  ) {
+    return this.usersService.resendSetupLink(
+      tenantId,
+      actor,
+      userId,
+      dto.language,
+    );
   }
 
   @Post(':userId/password')
