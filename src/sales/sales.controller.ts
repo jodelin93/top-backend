@@ -179,7 +179,8 @@ export class SalesController {
     @CurrentTenant() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.salesService.findOne(tenantId, id);
+    // Someone else's sale is "not found" without sales.view.all
+    return this.salesService.findVisible(tenantId, id);
   }
 
   /**

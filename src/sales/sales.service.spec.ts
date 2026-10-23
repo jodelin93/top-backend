@@ -154,6 +154,8 @@ describe('SalesService', () => {
             where: () => qb,
             andWhere: () => qb,
             orderBy: () => qb,
+            addOrderBy: () => qb,
+            setParameter: () => qb,
             limit: () => qb,
             getRawOne: () => Promise.resolve({ id: 'shift-at-capture' }),
           };
@@ -2494,6 +2496,8 @@ describe('SalesService', () => {
             where: () => qb,
             andWhere: () => qb,
             orderBy: () => qb,
+            addOrderBy: () => qb,
+            setParameter: () => qb,
             limit: () => qb,
             getRawOne: () => Promise.resolve(undefined),
           };

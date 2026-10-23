@@ -58,6 +58,7 @@ import {
   branchFilterSql,
   canAccessBranch,
 } from '../auth/branch-scope';
+import { assertSaleAccess, ownSalesFilterSql } from '../auth/sales-scope';
 import { SettingsService, StoreSettings } from '../settings/settings.service';
 import {
   CustomerGroupPricing,
@@ -384,6 +385,7 @@ export class SalesService implements OnModuleInit {
       register.id,
       settings,
       offline ? new Date(dto.offlineCapturedAt!) : null,
+      cashier.id,
     );
     // Offline, with no shift open then or now: its cash is in no drawer yet
     const noShift = offline && !shiftId;
@@ -1366,6 +1368,9 @@ export class SalesService implements OnModuleInit {
     // Only the sales of the user's branches (spec §9)
     const scope = branchFilterSql('sale');
     if (scope) qb.andWhere(scope.sql, scope.params);
+    // Without sales.view.all: only the sales the user rang up
+    const own = ownSalesFilterSql('sale');
+    if (own) qb.andWhere(own.sql, own.params);
 
     const [data, total] = await qb.getManyAndCount();
     return paginate(data, total, page, limit);
@@ -1390,6 +1395,8 @@ export class SalesService implements OnModuleInit {
       .addGroupBy('user.email');
     const scope = branchFilterSql('sale');
     if (scope) qb.andWhere(scope.sql, scope.params);
+    const own = ownSalesFilterSql('sale');
+    if (own) qb.andWhere(own.sql, own.params);
     const rows = await qb.getRawMany<{
       id: string;
       firstName: string | null;
@@ -1434,6 +1441,16 @@ export class SalesService implements OnModuleInit {
     if (!sale || !canAccessBranch(sale.branchId)) {
       throw new NotFoundException('Sale not found');
     }
+    return sale;
+  }
+
+  /**
+   * A sale as the user may see it: also "not found" when it is someone else's
+   * and they lack sales.view.all (findOne serves internal work too)
+   */
+  async findVisible(tenantId: string, id: string): Promise<Sale> {
+    const sale = await this.findOne(tenantId, id);
+    assertSaleAccess(sale);
     return sale;
   }
 
@@ -2107,6 +2124,7 @@ export class SalesService implements OnModuleInit {
     registerId: string,
     settings: StoreSettings,
     capturedAt: Date | null,
+    cashierId: string,
   ): Promise<string | null> {
     if (capturedAt) {
       const atCapture = await this.dataSource
@@ -2119,7 +2137,12 @@ export class SalesService implements OnModuleInit {
         .andWhere('(shift.closedAt IS NULL OR shift.closedAt >= :at)', {
           at: capturedAt,
         })
-        .orderBy('shift.openedAt', 'DESC')
+        // The cashier's own shift (or a shared one) first: the drawer they sold from
+        .orderBy(
+          'CASE WHEN shift.openedById = :cashier OR shift.shared = true THEN 0 ELSE 1 END',
+        )
+        .addOrderBy('shift.openedAt', 'DESC')
+        .setParameter('cashier', cashierId)
         .limit(1)
         .getRawOne<{ id: string }>();
       if (atCapture) return atCapture.id;
@@ -2131,7 +2154,7 @@ export class SalesService implements OnModuleInit {
     const shift = await this.shiftsService.getOpenShift(tenantId, registerId);
     if (!shift && settings.requireOpenShift) {
       throw new ConflictException(
-        'Open a shift on this register before selling',
+        'Open your own shift on this register before selling',
       );
     }
     return shift?.id ?? null;

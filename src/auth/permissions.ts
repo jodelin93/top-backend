@@ -20,7 +20,11 @@ export const PERMISSIONS = {
   },
   'pos.hold': { group: 'Point of sale', label: 'Hold and resume carts' },
   // Sales
-  'sales.view': { group: 'Sales', label: 'View sales' },
+  'sales.view': { group: 'Sales', label: 'View sales (their own)' },
+  'sales.view.all': {
+    group: 'Sales',
+    label: 'View every sale (all cashiers), not only their own',
+  },
   'sales.reprint': {
     group: 'Sales',
     label: 'Reprint receipts (marked COPY), e-mail or share them',

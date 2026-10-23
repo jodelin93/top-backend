@@ -299,13 +299,15 @@ export class ShiftsService {
       order: { openedAt: 'ASC' },
     });
     if (shifts.length === 0) return null;
-    // Several drawers open on the register: the signed-in cashier's own shift,
-    // else a shared one (one drawer: its shift, as before)
+    // A signed-in user works in their own shift, or a shared one; never in a
+    // shift another cashier opened on an assigned drawer (they open their own).
+    // Work without a user (jobs, consumers) takes the register's open shift.
     const me = requestContext.get()?.userId;
     const shift =
       shifts.find((sh) => me && sh.openedById === me) ??
       shifts.find((sh) => sh.shared) ??
-      shifts[0];
+      (me ? undefined : shifts[0]);
+    if (!shift) return null;
     return {
       id: shift.id,
       shiftNumber: shift.shiftNumber,
@@ -1432,11 +1434,13 @@ export class ShiftsService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    // Without shifts.manage you only see your own shifts (and shared ones)
+    // Without shifts.manage you only see your own shifts (opened or closed by
+    // you), and a shared shift still open: the one you may be selling on
     if (!can(user, 'shifts.manage')) {
-      qb.andWhere('(shift.openedById = :me OR shift.shared = true)', {
-        me: user.id,
-      });
+      qb.andWhere(
+        '(shift.openedById = :me OR shift.closedById = :me OR (shift.shared = true AND shift.status <> :closed))',
+        { me: user.id, closed: ShiftStatus.CLOSED },
+      );
     } else if (query.userId) {
       qb.andWhere('(shift.openedById = :uid OR shift.closedById = :uid)', {
         uid: query.userId,
@@ -2230,7 +2234,9 @@ export class ShiftsService {
     if (
       can(user, 'shifts.manage') ||
       shift.openedById === user.id ||
-      shift.shared
+      shift.closedById === user.id ||
+      // A shared shift: while it is open (others' past shifts stay theirs)
+      (shift.shared && shift.status !== ShiftStatus.CLOSED)
     )
       return;
     throw new ForbiddenException('You can only view your own shifts');
