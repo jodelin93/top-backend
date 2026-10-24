@@ -337,7 +337,7 @@ describe('Branch-level access (AC15)', () => {
       ).rejects.toThrow(NotFoundException);
     });
 
-    it('a branch-B estimate is not found; a store-level one is visible', async () => {
+    it('a branch-B estimate is not found, nor an old one without a branch', async () => {
       const findOne = jest.fn();
       const service = construct(EstimatesService, [{ findOne }]);
       findOne.mockResolvedValueOnce({ id: 'e-b', branchId: B, items: [] });
@@ -353,9 +353,10 @@ describe('Branch-level access (AC15)', () => {
         discountAmount: 0,
         total: 0,
       });
+      // Without a branch: only for users of every branch
       await expect(
         asBranchA(() => service.findOne(TENANT, 'e-0')),
-      ).resolves.toBeDefined();
+      ).rejects.toThrow(NotFoundException);
     });
   });
 

@@ -5,7 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { canAccessBranch, scopedBranchIds } from '../auth/branch-scope';
+import {
+  canAccessBranch,
+  hasAllBranches,
+  scopedBranchIds,
+} from '../auth/branch-scope';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import {
   assertQuantitiesFit,
@@ -69,10 +73,22 @@ export type EstimateView = Estimate & { expired: boolean };
 
 /**
  * Branch access (spec §9): an estimate of another branch is "not found" for a
- * branch-limited user; store-level estimates (no branch) are visible to all
+ * branch-limited user, and so is an old estimate without a branch (only users
+ * of every branch see those). New estimates always name their branch.
  */
 const estimateVisible = (estimate: Pick<Estimate, 'branchId'>) =>
-  !estimate.branchId || canAccessBranch(estimate.branchId);
+  estimate.branchId ? canAccessBranch(estimate.branchId) : hasAllBranches();
+
+/**
+ * The branch a new estimate is for: the one chosen, else the only branch of a
+ * user limited to one; otherwise it must be chosen.
+ */
+function estimateBranch(branchId: string | null | undefined): string {
+  if (branchId) return branchId;
+  const scope = scopedBranchIds();
+  if (scope?.length === 1) return scope[0];
+  throw new BadRequestException('Choose the branch of the estimate');
+}
 
 @Injectable()
 export class EstimatesService {
@@ -99,13 +115,12 @@ export class EstimatesService {
       .take(limit);
     if (query.status)
       qb.andWhere('estimate.status = :status', { status: query.status });
-    // Branch-limited users: their branches' estimates and store-level ones (no branch)
+    // Branch-limited users: their branches' estimates only
     const branches = scopedBranchIds();
     if (branches) {
-      qb.andWhere(
-        '(estimate.branchId IS NULL OR estimate.branchId = ANY(:estimateBranches))',
-        { estimateBranches: branches },
-      );
+      qb.andWhere('estimate.branchId = ANY(:estimateBranches)', {
+        estimateBranches: branches,
+      });
     }
     if (query.customerId)
       qb.andWhere('estimate.customerId = :customerId', {
@@ -145,6 +160,8 @@ export class EstimatesService {
     dto: CreateEstimateDto,
     approvalToken?: string,
   ) {
+    // Every estimate is for a branch (its staff see it, it quotes what it sells)
+    dto = { ...dto, branchId: estimateBranch(dto.branchId) };
     const id = await this.dataSource.transaction(async (manager) => {
       const estimateNumber = await nextDocumentNumber(manager, {
         table: 'estimates',
@@ -248,7 +265,10 @@ export class EstimatesService {
           dto.customerName !== undefined
             ? dto.customerName
             : estimate.customerName,
-        branchId: dto.branchId !== undefined ? dto.branchId : estimate.branchId,
+        // An estimate keeps a branch: it can move to another one, not to none
+        branchId: estimateBranch(
+          dto.branchId !== undefined ? dto.branchId : estimate.branchId,
+        ),
         cartDiscount:
           dto.cartDiscount !== undefined
             ? dto.cartDiscount
