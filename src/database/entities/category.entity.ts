@@ -43,6 +43,10 @@ export class Category extends BaseEntityWithVersion {
   @Column({ type: 'varchar', length: 255, nullable: true })
   imageUrl: string;
 
+  // Branches it is shown in: none = every branch (see categories/category-branches)
+  @Column({ type: 'uuid', array: true, nullable: true })
+  branchIds: string[] | null;
+
   // Relations
   @ManyToOne(() => Tenant, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'tenantId' })

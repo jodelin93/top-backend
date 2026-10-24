@@ -1,4 +1,6 @@
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsInt,
   IsNotEmpty,
@@ -25,6 +27,12 @@ export class CreateCategoryDto {
   @IsUUID() @IsOptional() parentId?: string | null;
   @IsInt() @Min(0) @IsOptional() sortOrder?: number;
   @IsString() @IsOptional() @MaxLength(255) imageUrl?: string | null;
+  // Branches it is shown in; empty or null = every branch
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(200)
+  @IsUUID('all', { each: true })
+  branchIds?: string[] | null;
 }
 
 export class UpdateCategoryDto extends PartialType(CreateCategoryDto) {

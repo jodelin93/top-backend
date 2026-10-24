@@ -6,6 +6,7 @@ import {
   PaymentMethod,
   PaymentMethodStatus,
 } from '../database/entities/payment-method.entity';
+import { categoryVisibleWhere } from '../categories/category-branches';
 import { Category } from '../database/entities/category.entity';
 import { Customer, CustomerStatus } from '../database/entities/customer.entity';
 import { SettingsService } from '../settings/settings.service';
@@ -302,8 +303,9 @@ export class SyncService {
           where: { tenantId, status: PaymentMethodStatus.ACTIVE },
           order: { code: 'ASC' },
         }),
+        // A cashier of one branch: that branch's categories (and those of every branch)
         this.dataSource.getRepository(Category).find({
-          where: { tenantId, isActive: true },
+          where: { tenantId, isActive: true, ...categoryVisibleWhere() },
           order: { sortOrder: 'ASC', code: 'ASC' },
         }),
       ]);
