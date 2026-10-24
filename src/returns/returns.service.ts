@@ -52,6 +52,7 @@ import {
   EXCHANGE_CREDIT_CODE,
   GIFT_CARD_CODE,
   ON_ACCOUNT_CODE,
+  ORDER_DEPOSIT_CODE,
   SpecialTenderCode,
   specialTenderOf,
   STORE_CREDIT_CODE,
@@ -1416,9 +1417,13 @@ export class ReturnsService {
       // Default: a sale (partly) on account gets a credit note for its share of the
       // return, the rest goes back to the original tenders (card first, then cash)
       const onAccount = refundable.filter((p) => p.special === ON_ACCOUNT_CODE);
+      // An order's deposits are no tender to give money back to: the rest
+      // of the sale's payments cover the refund, or the cashier chooses how
       const ordinary = refundable.filter(
         (p) =>
-          p.special !== ON_ACCOUNT_CODE && p.special !== EXCHANGE_CREDIT_CODE,
+          p.special !== ON_ACCOUNT_CODE &&
+          p.special !== EXCHANGE_CREDIT_CODE &&
+          p.special !== ORDER_DEPOSIT_CODE,
       );
       let remaining = cents(toPlan);
       if (onAccount.length) {
@@ -1511,6 +1516,11 @@ export class ReturnsService {
       if (special === EXCHANGE_CREDIT_CODE) {
         throw new BadRequestException(
           'Exchange credit is only given by an exchange',
+        );
+      }
+      if (special === ORDER_DEPOSIT_CODE) {
+        throw new BadRequestException(
+          'Choose how to give the money back (cash, card...): a deposit is not a payment method',
         );
       }
       const soFar = round2(

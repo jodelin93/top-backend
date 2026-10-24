@@ -116,6 +116,13 @@ export const STORED_VALUE_LINE = `COALESCE((i.metadata->>'storedValue')::boolean
  * non-cash tender: no money changed hands, so it is left out of the tender mix.
  */
 export const EXCHANGE_CREDIT_METHOD = `'EXCHANGE_CREDIT'`;
+/**
+ * An order's deposits are money received when they are paid (customer_order_payments);
+ * the ORDER_DEPOSIT tender that applies them to the pickup sale moves no money.
+ */
+export const ORDER_DEPOSIT_METHOD = `'ORDER_DEPOSIT'`;
+// Order deposits / refunds `op` of order `o` in the period at the selected branches
+const ORDER_PAYMENTS_IN_PERIOD = `op."tenantId" = $1 AND op.created_at >= $2 AND op.created_at <= $3 AND ${saleInBranch(B, 'o')}`;
 const NOT_EXCHANGE_CREDIT = (paymentMethodId: string) =>
   `NOT EXISTS (SELECT 1 FROM payment_methods xm WHERE xm.id = ${paymentMethodId} AND xm.code = ${EXCHANGE_CREDIT_METHOD})`;
 // Sales filed under a closed shift after it closed (e.g. offline sales uploaded late)
@@ -433,7 +440,7 @@ export const REPORTS: ReportDefinition[] = [
     key: 'payments-by-method',
     title: 'Payments by method',
     description:
-      'Tender mix: money taken and refunded per payment method and currency (cash net of change). Exchange credit is an internal tender and is not listed.',
+      'Tender mix: money taken and refunded per payment method and currency (cash net of change), order deposits included when they are paid. Exchange credit and deposits applied at pickup are internal tenders and are not listed.',
     group: 'Payments & tax',
     usesDateRange: true,
     branchFilter: true,
@@ -448,16 +455,28 @@ export const REPORTS: ReportDefinition[] = [
     ],
     sql: `
       WITH taken AS (
-        SELECT p."paymentMethodId" AS id, TRIM(s."currencyCode") AS currency, COUNT(*) AS count, SUM(p.amount) AS amount
-        FROM payments p JOIN sales s ON s.id = p."saleId"
-        WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} GROUP BY 1, 2
+        SELECT id, currency, SUM(count) AS count, SUM(amount) AS amount FROM (
+          SELECT p."paymentMethodId" AS id, TRIM(s."currencyCode") AS currency, COUNT(*) AS count, SUM(p.amount) AS amount
+          FROM payments p JOIN sales s ON s.id = p."saleId"
+          WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} GROUP BY 1, 2
+          UNION ALL
+          SELECT op."paymentMethodId", TRIM(o."currencyCode"), COUNT(*), SUM(op.amount)
+          FROM customer_order_payments op JOIN customer_orders o ON o.id = op."orderId"
+          WHERE ${ORDER_PAYMENTS_IN_PERIOD} AND op.type = 'deposit' GROUP BY 1, 2
+        ) t GROUP BY 1, 2
       ), change AS (
         SELECT TRIM(s."currencyCode") AS currency, COALESCE(SUM(s."changeAmount"), 0) AS amount
         FROM sales s WHERE ${IN_PERIOD} AND ${SOLD} GROUP BY 1
       ), refunded AS (
-        SELECT rf."paymentMethodId" AS id, TRIM(r."currencyCode") AS currency, SUM(rf.amount) AS amount
-        FROM sale_return_refunds rf JOIN sale_returns r ON r.id = rf."returnId"
-        WHERE ${RETURNS_IN_PERIOD} AND rf.status <> 'failed' GROUP BY 1, 2
+        SELECT id, currency, SUM(amount) AS amount FROM (
+          SELECT rf."paymentMethodId" AS id, TRIM(r."currencyCode") AS currency, SUM(rf.amount) AS amount
+          FROM sale_return_refunds rf JOIN sale_returns r ON r.id = rf."returnId"
+          WHERE ${RETURNS_IN_PERIOD} AND rf.status <> 'failed' GROUP BY 1, 2
+          UNION ALL
+          SELECT op."paymentMethodId", TRIM(o."currencyCode"), SUM(op.amount)
+          FROM customer_order_payments op JOIN customer_orders o ON o.id = op."orderId"
+          WHERE ${ORDER_PAYMENTS_IN_PERIOD} AND op.type = 'refund' GROUP BY 1, 2
+        ) t GROUP BY 1, 2
       ), keys AS (
         SELECT id, currency FROM taken UNION SELECT id, currency FROM refunded
       )
@@ -470,11 +489,55 @@ export const REPORTS: ReportDefinition[] = [
                THEN COALESCE(change.amount, 0) ELSE 0 END - COALESCE(refunded.amount, 0) AS net
       FROM keys
       JOIN payment_methods pm ON pm.id = keys.id AND pm."tenantId" = $1
-        AND pm.code <> ${EXCHANGE_CREDIT_METHOD}
+        AND pm.code NOT IN (${EXCHANGE_CREDIT_METHOD}, ${ORDER_DEPOSIT_METHOD})
       LEFT JOIN taken ON taken.id = keys.id AND taken.currency = keys.currency
       LEFT JOIN refunded ON refunded.id = keys.id AND refunded.currency = keys.currency
       LEFT JOIN change ON change.currency = keys.currency
       ORDER BY keys.currency, net DESC`,
+  },
+  {
+    key: 'order-deposits',
+    title: 'Order deposits',
+    description:
+      'Deposits received and refunded on orders, one row per payment, with the order, its customer and status. They are money held for the customer, not sales: the sale is counted at pickup.',
+    group: 'Payments & tax',
+    usesDateRange: true,
+    branchFilter: true,
+    columns: [
+      { key: 'date', label: 'Date', type: 'datetime' },
+      { key: 'orderNumber', label: 'Order', type: 'text' },
+      { key: 'customer', label: 'Customer', type: 'text' },
+      { key: 'branch', label: 'Branch', type: 'text' },
+      { key: 'type', label: 'Type', type: 'text', translate: true },
+      { key: 'method', label: 'Payment method', type: 'text' },
+      { key: 'reference', label: 'Reference', type: 'text' },
+      { key: 'takenBy', label: 'Taken by', type: 'text' },
+      { key: 'currency', label: 'Currency', type: 'text' },
+      { key: 'received', label: 'Received', type: 'money', total: true },
+      { key: 'refunded', label: 'Refunded', type: 'money', total: true },
+      {
+        key: 'orderStatus',
+        label: 'Order status',
+        type: 'text',
+        translate: true,
+      },
+    ],
+    sql: `
+      SELECT op.created_at AS date, o."orderNumber",
+             COALESCE(NULLIF(CONCAT_WS(' ', c."firstName", c."lastName"), ''), c."companyName", c.code) AS customer,
+             ${BRANCH_NAME('o."branchId"')} AS branch, op.type::text AS type,
+             pm.name->>'en' AS method, op.reference, ${PERSON('u')} AS "takenBy",
+             TRIM(o."currencyCode") AS currency,
+             CASE WHEN op.type = 'deposit' THEN op.amount ELSE 0 END AS received,
+             CASE WHEN op.type = 'refund' THEN op.amount ELSE 0 END AS refunded,
+             o.status::text AS "orderStatus"
+      FROM customer_order_payments op
+      JOIN customer_orders o ON o.id = op."orderId"
+      JOIN payment_methods pm ON pm.id = op."paymentMethodId"
+      LEFT JOIN customers c ON c.id = o."customerId"
+      LEFT JOIN users u ON u.id = op."userId"
+      WHERE ${ORDER_PAYMENTS_IN_PERIOD}
+      ORDER BY op.created_at`,
   },
   {
     key: 'payments-by-currency',

@@ -85,6 +85,9 @@ export class QuoteSaleDto {
   // Selling an estimate: its quoted prices and discounts need no new approval,
   // and the estimate is marked converted when the sale completes
   @IsUUID() @IsOptional() estimateId?: string;
+  // Picking up an order: sold at its prices, its deposits (added by the server)
+  // pay part of it, and the order is marked picked up when the sale completes
+  @IsUUID() @IsOptional() orderId?: string;
   @IsUUID() @IsOptional() customerId?: string;
   @IsUUID() @IsOptional() priceListId?: string;
   @IsString() @IsOptional() @MaxLength(50) discountCode?: string;

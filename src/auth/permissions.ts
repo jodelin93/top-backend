@@ -49,6 +49,14 @@ export const PERMISSIONS = {
     group: 'Sales',
     label: 'Create and send estimates (quotes)',
   },
+  'orders.manage': {
+    group: 'Sales',
+    label: 'Take orders with a deposit, take more deposits, mark them ready',
+  },
+  'orders.cancel': {
+    group: 'Sales',
+    label: 'Cancel orders and refund or keep their deposits',
+  },
   // Cash
   'shifts.operate': {
     group: 'Cash',
@@ -214,6 +222,7 @@ export const SYSTEM_ROLES: Record<
       'sales.view',
       'sales.reprint',
       'estimates.manage',
+      'orders.manage',
       'shifts.operate',
       'expenses.create',
       'customers.view',

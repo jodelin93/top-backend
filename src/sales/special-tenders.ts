@@ -14,6 +14,9 @@ import { isPgError, PG_UNIQUE_VIOLATION } from '../common/utils/pg-error';
  * - GIFT_CARD / STORE_CREDIT: paid from a stored value account (never overdrawn)
  * - EXCHANGE_CREDIT: the value of goods returned in an exchange, paying for the
  *   replacement sale (only usable through the exchange flow)
+ * - ORDER_DEPOSIT: the deposits paid on an order (already in a drawer or at a
+ *   provider when they were taken), paying for its pickup sale (added by the
+ *   server, never chosen at the till)
  *
  * None of them is accepted offline: each needs a live balance / limit check.
  */
@@ -21,12 +24,14 @@ export const ON_ACCOUNT_CODE = 'ON_ACCOUNT';
 export const GIFT_CARD_CODE = 'GIFT_CARD';
 export const STORE_CREDIT_CODE = 'STORE_CREDIT';
 export const EXCHANGE_CREDIT_CODE = 'EXCHANGE_CREDIT';
+export const ORDER_DEPOSIT_CODE = 'ORDER_DEPOSIT';
 
 export type SpecialTenderCode =
   | typeof ON_ACCOUNT_CODE
   | typeof GIFT_CARD_CODE
   | typeof STORE_CREDIT_CODE
-  | typeof EXCHANGE_CREDIT_CODE;
+  | typeof EXCHANGE_CREDIT_CODE
+  | typeof ORDER_DEPOSIT_CODE;
 
 const DEFINITIONS: Record<
   SpecialTenderCode,
@@ -48,7 +53,17 @@ const DEFINITIONS: Record<
     name: { en: 'Exchange credit', fr: "Crédit d'échange" },
     methodType: PaymentMethodType.OTHER,
   },
+  ORDER_DEPOSIT: {
+    name: { en: 'Deposit paid', fr: 'Acompte versé' },
+    methodType: PaymentMethodType.OTHER,
+  },
 };
+
+// Never offered in the till's tender list: only their own flow uses them
+const HIDDEN_CODES: SpecialTenderCode[] = [
+  EXCHANGE_CREDIT_CODE,
+  ORDER_DEPOSIT_CODE,
+];
 
 export const SPECIAL_TENDER_CODES = Object.keys(
   DEFINITIONS,
@@ -63,7 +78,8 @@ export const specialTenderOf = (
 
 /**
  * The method for a special tender, created (active) on first use. The exchange
- * credit method stays out of the till's tender list (settings.hidden).
+ * credit and order deposit methods stay out of the till's tender list
+ * (settings.hidden).
  */
 export async function ensureSpecialMethod(
   manager: EntityManager,
@@ -85,7 +101,7 @@ export async function ensureSpecialMethod(
         opensDrawer: false,
         provider: 'manual',
         status: PaymentMethodStatus.ACTIVE,
-        settings: code === EXCHANGE_CREDIT_CODE ? { hidden: true } : {},
+        settings: HIDDEN_CODES.includes(code) ? { hidden: true } : {},
       }),
     );
   } catch (error) {

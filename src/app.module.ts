@@ -36,6 +36,7 @@ import { ReturnsModule } from './returns/returns.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { StoredValueModule } from './stored-value/stored-value.module';
 import { EstimatesModule } from './estimates/estimates.module';
+import { OrdersModule } from './orders/orders.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { PlatformModule } from './platform/platform.module';
 import { IdempotencyModule } from './common/idempotency/idempotency.module';
@@ -134,6 +135,7 @@ import {
     LoyaltyModule,
     StoredValueModule,
     EstimatesModule,
+    OrdersModule,
     ExpensesModule,
     // Outbox, idempotency, notifications, reconciliation (spec §15/§17/§18/§24)
     PlatformModule,

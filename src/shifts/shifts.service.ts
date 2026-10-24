@@ -123,6 +123,14 @@ export interface ShiftSalesSummary {
   voidedCount: number;
   voidedTotal: number;
   byPaymentMethod: PaymentMethodTotal[];
+  // Deposits taken on orders in this session (not sales: the revenue comes at
+  // pickup), and deposits refunded. Cash ones are also the drawer's paid-in /
+  // refund movements.
+  orderDeposits: {
+    received: number;
+    refunded: number;
+    byPaymentMethod: PaymentMethodTotal[];
+  };
 }
 
 /**
@@ -1968,6 +1976,32 @@ export class ShiftsService {
        ORDER BY amount DESC`,
       [...params, COUNTED_PAYMENT_STATUSES],
     );
+    const deposits = await manager.query<
+      {
+        id: string;
+        name: string | null;
+        code: string;
+        methodType: string;
+        type: 'deposit' | 'refund';
+        count: string;
+        amount: string | number;
+      }[]
+    >(
+      `SELECT pm.id, pm.name->>'en' AS name, pm.code, pm."methodType", op.type::text AS type,
+              COUNT(*) AS count, COALESCE(SUM(op.amount), 0) AS amount
+       FROM customer_order_payments op
+       JOIN payment_methods pm ON pm.id = op."paymentMethodId"
+       WHERE op."tenantId" = $1 AND op."shiftId" = $2
+       GROUP BY pm.id, pm.name, pm.code, pm."methodType", op.type
+       ORDER BY amount DESC`,
+      [shift.tenantId, shift.id],
+    );
+    const sumOf = (type: 'deposit' | 'refund') =>
+      round2(
+        deposits
+          .filter((row) => row.type === type)
+          .reduce((sum, row) => sum + Number(row.amount), 0),
+      );
     return {
       count: Number(totals?.count ?? 0),
       total: round2(Number(totals?.total ?? 0)),
@@ -1980,6 +2014,19 @@ export class ShiftsService {
         count: Number(row.count),
         amount: round2(Number(row.amount)),
       })),
+      orderDeposits: {
+        received: sumOf('deposit'),
+        refunded: sumOf('refund'),
+        byPaymentMethod: deposits
+          .filter((row) => row.type === 'deposit')
+          .map((row) => ({
+            paymentMethodId: row.id,
+            name: row.name ?? row.code,
+            methodType: row.methodType,
+            count: Number(row.count),
+            amount: round2(Number(row.amount)),
+          })),
+      },
     };
   }
 

@@ -107,9 +107,11 @@ import {
 } from '../database/entities/stored-value-account.entity';
 import { OutboxService } from '../platform/outbox/outbox.service';
 import {
+  ensureSpecialMethod,
   EXCHANGE_CREDIT_CODE,
   GIFT_CARD_CODE,
   ON_ACCOUNT_CODE,
+  ORDER_DEPOSIT_CODE,
   returnedRows,
   SpecialTenderCode,
   specialTenderOf,
@@ -136,6 +138,12 @@ import {
   SaleItemInput,
 } from './sales.dto';
 import { containsPattern } from '../common/utils/like';
+import {
+  lockOrderForPickup,
+  markOrderPickedUp,
+  orderQuotedLines,
+  reopenOrderOfVoidedSale,
+} from '../orders/order-sale';
 
 interface PreparedSale {
   register: Register;
@@ -161,6 +169,8 @@ interface PreparedSale {
   // The customer's group pricing, and the group discount given on this sale
   group: CustomerGroupPricing | null;
   groupDiscount: GroupDiscountApplied | null;
+  // Order picked up by this sale: its deposits pay part of it
+  order: { id: string; orderNumber: string; paidAmount: number } | null;
 }
 
 /** Customer group discount given on a sale (sale.metadata.groupDiscount) */
@@ -359,6 +369,11 @@ export class SalesService implements OnModuleInit {
 
     const offline = !!options.offline;
     SalesService.assertOfflineFields(dto, offline);
+    if (dto.orderId && (offline || options.exchange)) {
+      throw new BadRequestException(
+        'An order is picked up online, at the till',
+      );
+    }
     // Cashier of record: the till's cashier for an uploaded offline sale
     const cashier = options.actingUser ?? user;
     // The till the request comes from (online) or that recorded the sale (sync),
@@ -390,12 +405,42 @@ export class SalesService implements OnModuleInit {
     // Offline, with no shift open then or now: its cash is in no drawer yet
     const noShift = offline && !shiftId;
 
-    const payments = await this.validatePayments(tenantId, dto, calc.total, {
-      saleCurrency: branch.currencyCode,
-      settings,
-      offline,
-      exchange: options.exchange,
-    });
+    // An order's deposits pay part of its pickup sale: added here, at the
+    // amount the order holds (the till only tenders the balance)
+    const order = prepared.order;
+    if (order && order.paidAmount > calc.total) {
+      throw new BadRequestException(
+        `The deposits paid on order ${order.orderNumber} (${order.paidAmount.toFixed(2)}) are more than this sale (${calc.total.toFixed(2)})`,
+      );
+    }
+    const depositMethod =
+      order && order.paidAmount > 0
+        ? await ensureSpecialMethod(
+            this.dataSource.manager,
+            tenantId,
+            ORDER_DEPOSIT_CODE,
+          )
+        : null;
+    const payments = await this.validatePayments(
+      tenantId,
+      depositMethod
+        ? {
+            ...dto,
+            payments: [
+              { paymentMethodId: depositMethod.id, amount: order!.paidAmount },
+              ...dto.payments,
+            ],
+          }
+        : dto,
+      calc.total,
+      {
+        saleCurrency: branch.currencyCode,
+        settings,
+        offline,
+        exchange: options.exchange,
+        orderDeposit: order?.paidAmount ?? 0,
+      },
+    );
     // Selling on account: the permission (or a manager's approval), the credit
     // hold and the limit (approval to exceed it); checked again atomically below
     const onAccount =
@@ -412,6 +457,11 @@ export class SalesService implements OnModuleInit {
       p.method.methodType !== PaymentMethodType.CASH &&
       this.paymentsService.providerOf(p.method).async;
     const deferred = !offline && payments.rows.some(isAsync);
+    if (deferred && order) {
+      throw new BadRequestException(
+        'Take the balance of an order in cash or with a manually confirmed payment',
+      );
+    }
     const target = deferred ? SaleStatus.PAYMENT_PENDING : SaleStatus.COMPLETED;
 
     let saleId: string;
@@ -431,6 +481,15 @@ export class SalesService implements OnModuleInit {
             dto.estimateId,
           );
         }
+        // An order is picked up once, with the deposits it was priced with
+        const lockedOrder = order
+          ? await lockOrderForPickup(
+              manager,
+              tenantId,
+              order.id,
+              order.paidAmount,
+            )
+          : null;
 
         // Completed: the branch's next number (D017). Waiting for a card: a
         // provisional P- number (a resumed cart keeps its H- number) until then.
@@ -486,6 +545,10 @@ export class SalesService implements OnModuleInit {
             // Customer group discount (printed as its own line on the receipt)
             groupDiscount: prepared.groupDiscount ?? undefined,
             estimateId: dto.estimateId ?? null,
+            ...(order && {
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+            }),
             changeTender: payments.changeTender,
             // Counted at checkout (also while waiting for a card); given back if cancelled
             discountConsumed: discount ? true : undefined,
@@ -740,6 +803,12 @@ export class SalesService implements OnModuleInit {
               sale.id,
             );
           }
+          if (lockedOrder) {
+            await markOrderPickedUp(manager, this.auditService, lockedOrder, {
+              id: sale.id,
+              saleNumber,
+            });
+          }
           await this.awardLoyalty(
             manager,
             tenantId,
@@ -980,6 +1049,11 @@ export class SalesService implements OnModuleInit {
     if (dto.giftCards?.length) {
       throw new BadRequestException(
         'Gift cards are sold at checkout and cannot be held',
+      );
+    }
+    if (dto.orderId) {
+      throw new BadRequestException(
+        'An order waits in the orders list: it cannot be held',
       );
     }
     const prepared = await this.prepare(tenantId, dto, false);
@@ -1549,6 +1623,8 @@ export class SalesService implements OnModuleInit {
         sale.id,
         `Void ${sale.saleNumber}`,
       );
+      // A voided pickup gives the order back (ready, its deposits intact)
+      await reopenOrderOfVoidedSale(manager, this.auditService, tenantId, sale);
       await this.outbox?.record(manager, {
         tenantId,
         type: 'sale.voided',
@@ -1742,17 +1818,45 @@ export class SalesService implements OnModuleInit {
       variantList.map((v) => v.product.taxCategoryId),
     );
 
-    // An estimate's quoted prices/discounts replace the catalog as the reference,
-    // for its customer and up to the quantities it quoted
-    const quoted = dto.estimateId
-      ? await this.estimatesService.quotedLines(tenantId, dto.estimateId)
-      : null;
-    if (
-      quoted?.estimate.customerId &&
-      quoted.estimate.customerId !== (customer?.id ?? null)
-    ) {
+    if (dto.estimateId && dto.orderId) {
       throw new BadRequestException(
-        `Estimate ${quoted.estimate.estimateNumber} is for another customer`,
+        'A sale sells an estimate or an order, not both',
+      );
+    }
+    // An estimate's (or an order's) prices/discounts replace the catalog as the
+    // reference, for its customer and up to the quantities it quoted
+    const quoted = dto.estimateId
+      ? await this.estimatesService
+          .quotedLines(tenantId, dto.estimateId)
+          .then(({ estimate, lines }) => ({
+            label: `Estimate ${estimate.estimateNumber}`,
+            customerId: estimate.customerId,
+            cartDiscount: estimate.cartDiscount,
+            groupDiscountPercent: 0,
+            order: null,
+            lines,
+          }))
+      : dto.orderId
+        ? await orderQuotedLines(
+            this.dataSource.manager,
+            tenantId,
+            dto.orderId,
+          ).then(({ order, lines }) => ({
+            label: `Order ${order.orderNumber}`,
+            customerId: order.customerId,
+            cartDiscount: order.cartDiscount,
+            // The group discount given when the order was taken
+            groupDiscountPercent: Number(order.groupDiscountPercent),
+            order,
+            lines,
+          }))
+        : null;
+    if (quoted?.customerId && quoted.customerId !== (customer?.id ?? null)) {
+      throw new BadRequestException(`${quoted.label} is for another customer`);
+    }
+    if (quoted?.order && quoted.order.branchId !== register.branchId) {
+      throw new BadRequestException(
+        `${quoted.label} is picked up at its own branch`,
       );
     }
     // Quoted units not used yet by earlier lines, per variant
@@ -1764,8 +1868,11 @@ export class SalesService implements OnModuleInit {
 
     // Group discount: the group's, online. Offline, what the till gave (it
     // happened; more than the group's is flagged below like a manual discount).
-    // Not on an estimate's sale: it is sold at the prices it quoted.
-    const entitledGroupPercent = quoted ? 0 : (group?.discountPercent ?? 0);
+    // Not on an estimate's sale: it is sold at the prices it quoted (an order
+    // keeps the group discount it was taken with).
+    const entitledGroupPercent = quoted
+      ? quoted.groupDiscountPercent
+      : (group?.discountPercent ?? 0);
     const groupDiscountPercent = offline
       ? Math.min(Math.max(Number(dto.groupDiscountPercent ?? 0), 0), 100)
       : entitledGroupPercent;
@@ -1831,12 +1938,12 @@ export class SalesService implements OnModuleInit {
       calc = withGiftCardLines(calc, giftCards, giftVariant.productId);
     }
 
-    // Discounts already on the estimate were authorised when it was written
+    // Discounts already on the estimate / order were authorised when it was written
     const sameCartDiscount =
-      !!quoted?.estimate.cartDiscount &&
+      !!quoted?.cartDiscount &&
       !!dto.cartDiscount &&
-      quoted.estimate.cartDiscount.type === dto.cartDiscount.type &&
-      Number(quoted.estimate.cartDiscount.value) >= dto.cartDiscount.value;
+      quoted.cartDiscount.type === dto.cartDiscount.type &&
+      Number(quoted.cartDiscount.value) >= dto.cartDiscount.value;
     const overrideLines = inputs.map((input) => ({
       key: input.key,
       catalogPrice: catalogPrices.get(input.key)!,
@@ -1902,6 +2009,13 @@ export class SalesService implements OnModuleInit {
             name: group?.name ?? null,
             percent: groupDiscountPercent,
             amount: calc.groupDiscountAmount,
+          }
+        : null,
+      order: quoted?.order
+        ? {
+            id: quoted.order.id,
+            orderNumber: quoted.order.orderNumber,
+            paidAmount: round2(Number(quoted.order.paidAmount)),
           }
         : null,
     };
@@ -2496,6 +2610,8 @@ export class SalesService implements OnModuleInit {
       settings: StoreSettings;
       offline: boolean;
       exchange?: SaleCreateOptions['exchange'];
+      // Deposits of the order this sale picks up (paid with ORDER_DEPOSIT)
+      orderDeposit?: number;
     },
   ): Promise<{
     rows: ValidatedPayment[];
@@ -2704,6 +2820,7 @@ export class SalesService implements OnModuleInit {
       dto,
       rows,
       currency.exchange,
+      currency.orderDeposit ?? 0,
     );
     return {
       rows,
@@ -2725,10 +2842,12 @@ export class SalesService implements OnModuleInit {
     dto: CreateSaleDto,
     rows: ValidatedPayment[],
     exchange: SaleCreateOptions['exchange'],
+    orderDeposit: number,
   ): Promise<number> {
     const cents = (value: number) => Math.round(value * 100);
     let onAccount = 0;
     let exchangeCredit = 0;
+    let deposits = 0;
     const spend = new Map<
       string,
       { account: StoredValueAccount; cents: number }
@@ -2737,6 +2856,10 @@ export class SalesService implements OnModuleInit {
       if (!row.special) continue;
       if (row.special === ON_ACCOUNT_CODE) {
         onAccount += cents(row.amount);
+        continue;
+      }
+      if (row.special === ORDER_DEPOSIT_CODE) {
+        deposits += cents(row.amount);
         continue;
       }
       if (row.special === EXCHANGE_CREDIT_CODE) {
@@ -2804,6 +2927,14 @@ export class SalesService implements OnModuleInit {
             : `The customer has ${Number(account.balance).toFixed(2)} of store credit`,
         );
       }
+    }
+    // Only the deposits of the order picked up, exactly (added by the server)
+    if (deposits !== cents(orderDeposit)) {
+      throw new BadRequestException(
+        deposits > 0 && !dto.orderId
+          ? 'Deposits only pay for the pickup of their order'
+          : "An order's deposits are added by the server: tender only the balance",
+      );
     }
     if (exchange && exchangeCredit !== cents(exchange.creditAmount)) {
       throw new BadRequestException(
