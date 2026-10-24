@@ -4,6 +4,8 @@ import {
   checkBarcode,
   gs1CheckDigit,
   isSoldAtBranch,
+  isSoldInBranches,
+  soldInBranchesSql,
   MAX_TAGS,
   normalizeBarcode,
   normalizeTags,
@@ -184,5 +186,28 @@ describe('labels', () => {
     const labels = buildLabels(sources, [{ variantId: 'v-1', copies: 1 }]);
     expect(Object.keys(labels[0])).not.toContain('cost');
     expect(JSON.stringify(labels)).not.toContain('3.2');
+  });
+});
+
+describe('a branch-limited user’s catalog', () => {
+  it('shows products sold at one of their branches, and those sold everywhere', () => {
+    expect(isSoldInBranches(['b-1'], ['b-1', 'b-2'])).toBe(true);
+    expect(isSoldInBranches([], ['b-1'])).toBe(true);
+    expect(isSoldInBranches(null, ['b-1'])).toBe(true);
+  });
+
+  it('hides products sold only at other branches', () => {
+    expect(isSoldInBranches(['b-3'], ['b-1', 'b-2'])).toBe(false);
+  });
+
+  it('does not limit a user of every branch', () => {
+    expect(isSoldInBranches(['b-3'], null)).toBe(true);
+  });
+
+  it('filters in SQL on the same rule', () => {
+    const sql = soldInBranchesSql('p');
+    expect(sql).toContain('NOT EXISTS');
+    expect(sql).toContain('= ANY(:scopeBranchIds)');
+    expect(sql).toContain('"productId" = p.id');
   });
 });

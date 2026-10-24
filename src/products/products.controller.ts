@@ -86,7 +86,8 @@ export class ProductsController {
     @CurrentTenant() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<Product> {
-    return this.productsService.findOne(tenantId, id);
+    // Sold only at other branches: "not found" for a branch-limited user
+    return this.productsService.findVisible(tenantId, id);
   }
 
   /**
@@ -140,7 +141,7 @@ export class ProductsController {
     @CurrentTenant() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<ProductVariant[]> {
-    await this.productsService.findOne(tenantId, id);
+    await this.productsService.findVisible(tenantId, id);
     return this.productsService.getProductVariants(tenantId, id);
   }
 

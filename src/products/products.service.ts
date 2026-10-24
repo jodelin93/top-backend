@@ -42,6 +42,7 @@ import {
   uniqueSku,
 } from './variant-generator';
 import { ProductUnit } from '../database/entities/product-unit.entity';
+import { scopedBranchIds } from '../auth/branch-scope';
 import { ProductBranch } from '../database/entities/product-branch.entity';
 import { Branch } from '../database/entities/branch.entity';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/utils/pg-error';
@@ -51,6 +52,8 @@ import {
   normalizeTags,
   parseTagFilter,
   soldAtBranchSql,
+  soldInBranchesSql,
+  isSoldInBranches,
 } from './catalog-rules';
 import { PrintLabelsDto } from './dto/labels.dto';
 import { containsPattern } from '../common/utils/like';
@@ -267,6 +270,11 @@ export class ProductsService {
         branchId: filters.branchId,
       });
     }
+    // A branch-limited user sees the products sold at their branches only
+    const scope = scopedBranchIds();
+    if (scope) {
+      query.andWhere(soldInBranchesSql('product'), { scopeBranchIds: scope });
+    }
 
     if (filters?.unitId) {
       query.andWhere('product.unitId = :unitId', { unitId: filters.unitId });
@@ -316,6 +324,18 @@ export class ProductsService {
     }
 
     product.branchIds = await this.assortmentOf(tenantId, product.id);
+    return product;
+  }
+
+  /**
+   * A product as the user may see it: a product sold only at other branches is
+   * "not found" for a branch-limited user (findOne also serves internal work)
+   */
+  async findVisible(tenantId: string, id: string): Promise<Product> {
+    const product = await this.findOne(tenantId, id);
+    if (!isSoldInBranches(product.branchIds, scopedBranchIds())) {
+      throw new NotFoundException('Product not found');
+    }
     return product;
   }
 

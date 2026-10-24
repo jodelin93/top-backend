@@ -14,6 +14,7 @@ import {
 } from '../products/variant-units';
 import { Estimate, EstimateStatus } from '../database/entities/estimate.entity';
 import { EstimateItem } from '../database/entities/estimate-item.entity';
+import { isSoldAtBranch } from '../products/catalog-rules';
 import { Branch } from '../database/entities/branch.entity';
 import {
   assertDateRange,
@@ -540,6 +541,29 @@ export class EstimatesService {
       ) {
         throw new BadRequestException(
           `${v.product.name?.en ?? v.sku} is not available for sale`,
+        );
+      }
+    }
+    // An estimate for a branch quotes only what that branch sells
+    if (branch) {
+      const rows = await manager.query<
+        { productId: string; branchId: string }[]
+      >(
+        `SELECT "productId", "branchId" FROM product_branches WHERE "tenantId" = $1 AND "productId" = ANY($2)`,
+        [tenantId, [...new Set(variants.map((v) => v.productId))]],
+      );
+      const notHere = variants.filter(
+        (v) =>
+          !isSoldAtBranch(
+            rows
+              .filter((r) => r.productId === v.productId)
+              .map((r) => r.branchId),
+            branch.id,
+          ),
+      );
+      if (notHere.length) {
+        throw new BadRequestException(
+          `${notHere[0].product.name?.en ?? notHere[0].sku} is not sold at ${branch.name}`,
         );
       }
     }

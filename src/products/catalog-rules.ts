@@ -136,7 +136,21 @@ export const soldAtBranchSql = (productAlias = 'product', param = 'branchId') =>
   `(NOT EXISTS (SELECT 1 FROM product_branches pb_all WHERE pb_all."productId" = ${productAlias}.id)
     OR EXISTS (SELECT 1 FROM product_branches pb_here WHERE pb_here."productId" = ${productAlias}.id AND pb_here."branchId" = :${param}))`;
 
+/** Sold at one of these branches (a uuid[] parameter): a branch-limited user's catalog */
+export const soldInBranchesSql = (
+  productAlias = 'product',
+  param = 'scopeBranchIds',
+) =>
+  `(NOT EXISTS (SELECT 1 FROM product_branches pb_all WHERE pb_all."productId" = ${productAlias}.id)
+    OR EXISTS (SELECT 1 FROM product_branches pb_in WHERE pb_in."productId" = ${productAlias}.id AND pb_in."branchId" = ANY(:${param})))`;
+
 /** Same rule in memory */
+/** Sold at one of these branches (null scope: every branch) */
+export const isSoldInBranches = (
+  assortment: readonly string[] | null | undefined,
+  scope: readonly string[] | null,
+) => !scope || !assortment?.length || assortment.some((b) => scope.includes(b));
+
 export const isSoldAtBranch = (
   assortment: readonly string[] | null | undefined,
   branchId: string | null | undefined,
