@@ -500,6 +500,48 @@ describe('UsersService', () => {
       ).resolves.toBe(true);
     });
   });
+  describe('resetMfa', () => {
+    it('lets an owner turn off a member’s two-factor and lift their lock', async () => {
+      membershipRepository.findOne.mockResolvedValue({
+        ...membership('u1', MembershipRole.ADMIN),
+        user: { id: 'u1', email: 'u1@example.com', mfaEnabled: true },
+      });
+      membershipRepository.count.mockResolvedValue(0);
+      await service.resetMfa(TENANT, actor('boss', MembershipRole.OWNER), 'u1');
+      expect(userRepository.update).toHaveBeenCalledWith('u1', {
+        mfaEnabled: false,
+        mfaSecret: null,
+        mfaLastUsedStep: null,
+        failedLoginCount: 0,
+        lockedUntil: null,
+      });
+    });
+
+    it('is for owners only', async () => {
+      await expect(
+        service.resetMfa(TENANT, actor('admin', MembershipRole.ADMIN), 'u1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('is not for one’s own account', async () => {
+      await expect(
+        service.resetMfa(TENANT, actor('boss', MembershipRole.OWNER), 'boss'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('is refused for an account used in another store too', async () => {
+      membershipRepository.findOne.mockResolvedValue(
+        membership('u1', MembershipRole.CASHIER),
+      );
+      membershipRepository.count.mockResolvedValue(1);
+      await expect(
+        service.resetMfa(TENANT, actor('boss', MembershipRole.OWNER), 'u1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(userRepository.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('choose-your-password link (e-mail sending on)', () => {
     const email = {
       enabled: true,

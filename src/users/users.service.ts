@@ -509,6 +509,55 @@ export class UsersService {
   }
 
   /**
+   * The owner turns off someone's two-factor authentication (lost phone, codes
+   * refused): the lock is lifted too and the account is signed out everywhere.
+   * At their next sign-in, a role that needs it sets two-factor up again.
+   */
+  async resetMfa(tenantId: string, actor: AuthUser, userId: string) {
+    if (actor.role !== OWNER_ROLE) {
+      throw new ForbiddenException(
+        'Only an owner can reset two-factor authentication',
+      );
+    }
+    if (userId === actor.id) {
+      throw new ForbiddenException(
+        'Turn off your own two-factor authentication from your account settings',
+      );
+    }
+    const membership = await this.getMembership(tenantId, userId);
+    // Two-factor protects the whole account: not from one of its stores only
+    const otherStores = await this.membershipRepository.count({
+      where: { userId, tenantId: Not(tenantId) },
+    });
+    if (otherStores > 0) {
+      throw new ForbiddenException(
+        'This account is also used in another store. The user must turn off two-factor themselves.',
+      );
+    }
+    const wasOn = !!membership.user.mfaEnabled;
+    await this.userRepository.update(userId, {
+      mfaEnabled: false,
+      mfaSecret: null as unknown as string,
+      mfaLastUsedStep: null,
+      failedLoginCount: 0,
+      lockedUntil: null,
+    });
+    await this.auditService.record({
+      tenantId,
+      action: 'user.mfa_reset',
+      entityType: 'user',
+      entityId: userId,
+      changes: { before: { mfaEnabled: wasOn }, after: { mfaEnabled: false } },
+    });
+    await this.sessionsService?.revokeForMemberChange(
+      tenantId,
+      userId,
+      'mfa_reset',
+      true,
+    );
+  }
+
+  /**
    * The role must exist in this store; only owners can grant the owner role, and
    * nobody else can grant a role with permissions they don't have themselves
    */

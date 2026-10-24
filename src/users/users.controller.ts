@@ -57,6 +57,17 @@ export class UsersController {
     return this.usersService.update(tenantId, actor, userId, dto);
   }
 
+  /** The owner turns off a member's two-factor (lost phone) and lifts their lock */
+  @Post(':userId/mfa/reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  resetMfa(
+    @CurrentTenant() tenantId: string,
+    @CurrentUser() actor: AuthUser,
+    @Param('userId', ParseUUIDPipe) userId: string,
+  ) {
+    return this.usersService.resetMfa(tenantId, actor, userId);
+  }
+
   /** The "choose your password" link again, for someone who has not used it */
   @Post(':userId/setup-link')
   @HttpCode(HttpStatus.NO_CONTENT)
