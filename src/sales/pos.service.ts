@@ -192,6 +192,9 @@ export class PosService {
       })
       .orderBy('product.name', 'ASC')
       .addOrderBy('variant.sortOrder', 'ASC')
+      // A stable order: the till downloads the whole catalog page by page
+      .addOrderBy('variant.id', 'ASC')
+      .skip(query.offset ?? 0)
       .take(query.limit ?? 100);
 
     if (register?.branchId) {

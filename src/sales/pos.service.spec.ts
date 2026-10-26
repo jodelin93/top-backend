@@ -50,6 +50,7 @@ describe('PosService catalog', () => {
       orderBy: () => qb,
       addOrderBy: () => qb,
       take: () => qb,
+      skip: () => qb,
       andWhere: (sql: string, params?: Record<string, unknown>) => {
         wheres.push([sql, params]);
         return qb;
@@ -162,6 +163,7 @@ describe('PosService catalog: weighted / price-embedded barcodes', () => {
         orderBy: () => qb,
         addOrderBy: () => qb,
         take: () => qb,
+        skip: () => qb,
         andWhere: (sql: string, params?: Record<string, unknown>) => {
           wheres.push([sql, params]);
           if (sql.includes('pluCode')) plu = true;

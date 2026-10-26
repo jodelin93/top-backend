@@ -211,6 +211,13 @@ export class CatalogQueryDto {
   @Max(500)
   @IsOptional()
   limit?: number;
+  // Pages of the full download (offline catalog)
+  @Transform(({ value }) => (value === undefined ? undefined : Number(value)))
+  @IsInt()
+  @Min(0)
+  @Max(1_000_000)
+  @IsOptional()
+  offset?: number;
 }
 
 /** Prices of cart items for a customer (group price list) at a register */
