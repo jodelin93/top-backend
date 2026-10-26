@@ -129,6 +129,14 @@ describe('Tenant isolation attack (e2e, AC15)', () => {
       createStore(dataSource, baseUrl, 'isoa'),
       createStore(dataSource, baseUrl, 'isob'),
     ]);
+    // Sales are refused by the cross-store checks, not for want of a cash
+    // session (the store default asks for one)
+    for (const store of [A, B]) {
+      const r = await store.api('patch', '/settings', {
+        requireOpenShift: false,
+      });
+      expect(r.status).toBeLessThan(300);
+    }
     // A has some data of its own, so lists are not trivially empty
     await stockedProduct(A, `ISO-A-${RUN}`, 3, 5);
     await A.api('post', '/customers', {

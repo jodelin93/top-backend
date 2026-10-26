@@ -56,7 +56,7 @@ export const envSchema = Joi.object<Record<string, unknown>>({
   JWT_SECRET: Joi.string().when('NODE_ENV', isProd),
   // Access token lifetime, e.g. 24h, 12h, 30m
   JWT_EXPIRES_IN: Joi.string().empty('').default('24h'),
-  BCRYPT_ROUNDS: Joi.number().integer().min(10).max(15).default(10),
+  BCRYPT_ROUNDS: Joi.number().integer().min(10).max(15).default(12),
   // Signs offline capability leases held by tills (spec §19); required outside development/test
   OFFLINE_LEASE_SECRET: Joi.string().min(32).empty('').when('NODE_ENV', isProd),
   // Key of the gift card code HMAC; required outside development/test. Never

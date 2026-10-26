@@ -5,6 +5,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -194,6 +195,7 @@ const ADJUSTMENT_MOVEMENT: Record<AdjustmentReason, MovementType> = {
 
 @Injectable()
 export class InventoryService {
+  private readonly logger = new Logger(InventoryService.name);
   // Default source keys already used per transaction (see resolveSourceKey)
   private readonly keyOccurrences = new WeakMap<
     EntityManager,
@@ -820,10 +822,15 @@ export class InventoryService {
       input.variantId,
       input.locationId,
     );
-    level.quantityInTransit = Math.max(
-      0,
-      addQty(level.quantityInTransit, input.delta),
-    );
+    const next = addQty(level.quantityInTransit, input.delta);
+    // Below 0 means the counter and the transfers disagree (e.g. a transfer
+    // dispatched before the counter existed): kept at 0, but said out loud
+    if (next < 0) {
+      this.logger.warn(
+        `In-transit count of variant ${input.variantId} at ${input.locationId} would go to ${next}: kept at 0`,
+      );
+    }
+    level.quantityInTransit = Math.max(0, next);
     return manager.save(level);
   }
 
@@ -1633,11 +1640,21 @@ export class InventoryService {
   }
 
   private async assertLocation(tenantId: string, locationId: string) {
-    const exists = await this.dataSource
+    const location = await this.dataSource
       .getRepository(InventoryLocation)
-      .exists({ where: { id: locationId, tenantId } });
-    if (!exists) {
+      .findOne({
+        where: { id: locationId, tenantId },
+        relations: { warehouse: true },
+        select: { id: true, warehouse: { id: true, warehouseType: true } },
+      });
+    if (!location) {
       throw new NotFoundException('Location not found');
+    }
+    // Units in transit belong to their transfers: moved by receipts and write-offs only
+    if (location.warehouse?.warehouseType === WarehouseType.TRANSIT) {
+      throw new BadRequestException(
+        'Stock in transit is changed through its transfer, not here',
+      );
     }
     // Stock of another branch's locations is not visible nor movable (spec §9)
     await assertLocationAccess(this.dataSource.manager, tenantId, locationId);

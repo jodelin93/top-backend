@@ -23,7 +23,8 @@ let dummyHash: string | null = null;
 const getDummyHash = () =>
   (dummyHash ??= bcrypt.hashSync(
     `no-such-account-${Math.random()}`,
-    bcrypt.genSaltSync(10),
+    // Same cost as real hashes, so an unknown account takes as long
+    bcrypt.genSaltSync(Number(process.env.BCRYPT_ROUNDS) || 12),
   ));
 
 /** Anything that runs SQL: a repository, an entity manager, a data source */

@@ -10,6 +10,7 @@ import {
   Param,
   ParseEnumPipe,
   ParseUUIDPipe,
+  Logger,
   Req,
   Res,
 } from '@nestjs/common';
@@ -25,6 +26,7 @@ import {
   ForgotPasswordDto,
   LoginDto,
   MfaTokenDto,
+  EnableMfaDto,
   ResetPasswordWithTokenDto,
   SwitchStoreDto,
 } from './dto';
@@ -57,6 +59,8 @@ type SessionResponse = Omit<LoginResponse, 'accessToken'> & {
 @ApiBearerAuth('JWT-auth')
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private authService: AuthService,
     private passwordResetService: PasswordResetService,
@@ -96,15 +100,15 @@ export class AuthController {
   @AuthThrottle()
   @Post('password/forgot')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async forgotPassword(
-    @Body() dto: ForgotPasswordDto,
-    @Req() req: Request,
-  ): Promise<void> {
-    await this.passwordResetService.request(
-      dto.email,
-      dto.language,
-      req.ip ?? null,
-    );
+  forgotPassword(@Body() dto: ForgotPasswordDto, @Req() req: Request): void {
+    // Answered at once: the time taken must not tell whether the account exists
+    void this.passwordResetService
+      .request(dto.email, dto.language, req.ip ?? null)
+      .catch((error: unknown) =>
+        this.logger.warn(
+          `Password reset request failed: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
   }
 
   /**
@@ -152,12 +156,14 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @AnyMember()
   @AllowDuringMfaSetup()
+  @AuthThrottle()
   @Post('mfa/enable')
   @HttpCode(HttpStatus.OK)
   async enableMfa(
     @CurrentUser() user: AuthUser,
+    @Body() dto: EnableMfaDto,
   ): Promise<{ secret: string; qrCode: string }> {
-    return this.authService.enableMfa(user.id);
+    return this.authService.enableMfa(user.id, dto.currentPassword);
   }
 
   /**

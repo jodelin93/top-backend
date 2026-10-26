@@ -135,6 +135,18 @@ function setup() {
       fakeRepo([
         { tenantId: TENANT, userId: 'user-2', status: MembershipStatus.ACTIVE },
         { tenantId: TENANT, userId: 'user-3', status: MembershipStatus.ACTIVE },
+        {
+          tenantId: TENANT,
+          userId: 'user-at-a',
+          status: MembershipStatus.ACTIVE,
+          branchIds: ['branch-a'],
+        },
+        {
+          tenantId: TENANT,
+          userId: 'user-at-b',
+          status: MembershipStatus.ACTIVE,
+          branchIds: ['branch-b'],
+        },
       ]),
     ],
   ]);
@@ -245,6 +257,27 @@ describe('EmployeesService', () => {
       table(EmployeeBranch).find((b) => b.branchId === 'branch-b')?.isPrimary,
     ).toBe(true);
     expect(actions()).toContain('employee.branches_assigned');
+  });
+
+  it('keeps phone, e-mail and notes out of the audit trail', async () => {
+    const { service, audit } = setup();
+    const { id } = await service.create(TENANT, {
+      firstName: 'Marie',
+      lastName: 'Joseph',
+      phone: '+509 3700 0000',
+      notes: 'Allergic to peanuts',
+    });
+    await service.update(TENANT, id, { phone: '+509 3711 1111' });
+    const logged = JSON.stringify(audit.record.mock.calls);
+    expect(logged).not.toContain('3700');
+    expect(logged).not.toContain('3711');
+    expect(logged).not.toContain('peanuts');
+    const update = (
+      audit.record.mock.calls as unknown as [
+        { action: string; metadata?: { privateFieldsChanged: string[] } },
+      ][]
+    ).find(([entry]) => entry.action === 'employee.updated')![0];
+    expect(update.metadata?.privateFieldsChanged).toEqual(['phone']);
   });
 
   it('links a member account once and unlinks it', async () => {
@@ -558,12 +591,16 @@ describe('EmployeesService', () => {
         TENANT,
         'att-b',
         { clockOut: '2026-09-24T17:00:00Z' },
+        branchManager,
         SCOPE_A,
       ),
     ).rejects.toThrow(new NotFoundException('Attendance record not found'));
-    const closed = await service.closeAttendance(TENANT, 'att-b', {
-      clockOut: '2026-09-24T17:00:00Z',
-    });
+    const closed = await service.closeAttendance(
+      TENANT,
+      'att-b',
+      { clockOut: '2026-09-24T17:00:00Z' },
+      admin,
+    );
     expect(closed.clockOut).toBeInstanceOf(Date);
   });
 
@@ -595,6 +632,54 @@ describe('EmployeesService', () => {
       '"a"."branchId" = ANY(:branchScopeIds)',
       { branchScopeIds: ['branch-a'] },
     ]);
+  });
+
+  it('a branch-limited user links only accounts within their branches', async () => {
+    const { service } = setup();
+    const e = await service.create(TENANT, {
+      firstName: 'A',
+      lastName: 'One',
+      branches: [{ branchId: 'branch-a' }],
+    });
+    // Another branch's account, or one working everywhere: refused
+    for (const userId of ['user-at-b', 'user-3']) {
+      await expect(
+        service.linkUser(TENANT, e.id, userId, SCOPE_A),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    }
+    const linked = await service.linkUser(TENANT, e.id, 'user-at-a', SCOPE_A);
+    expect(linked.userId).toBe('user-at-a');
+  });
+
+  it('never lets a manager record their own hours', async () => {
+    const { service, table } = setup();
+    const e = await service.create(TENANT, { firstName: 'A', lastName: 'One' });
+    await service.linkUser(TENANT, e.id, 'user-2');
+    const self = { ...admin, id: 'user-2' } as AuthUser;
+    await expect(
+      service.recordAttendance(TENANT, self, e.id, {
+        clockIn: '2026-09-24T08:00:00Z',
+        clockOut: '2026-09-24T12:00:00Z',
+        note: 'paper timesheet',
+      }),
+    ).rejects.toThrow('Ask another manager to record your own hours');
+    // …nor close their own open clock-in by hand
+    table(EmployeeAttendance).push({
+      id: 'att-self',
+      tenantId: TENANT,
+      employeeId: e.id,
+      branchId: null,
+      clockIn: new Date('2026-09-24T08:00:00Z'),
+      clockOut: null,
+    });
+    await expect(
+      service.closeAttendance(
+        TENANT,
+        'att-self',
+        { clockOut: '2026-09-27T17:00:00Z' },
+        self,
+      ),
+    ).rejects.toThrow('Ask another manager to record your own hours');
   });
 
   it('rejects an admin record whose clock-out is before the clock-in', async () => {

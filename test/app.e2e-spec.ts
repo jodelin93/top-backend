@@ -6,6 +6,7 @@ import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { deleteTenant } from './helpers/delete-tenant';
@@ -21,6 +22,9 @@ import { payloadHash } from '../src/sync/payload-hash';
  */
 
 const RUN = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// One device for every sign-in of the run: a new sign-in replaces the last one
+// (one signed-in device per user) instead of being refused
+const DEVICE = randomUUID();
 const OWNER_EMAIL = `e2e-owner-${RUN}@test.local`;
 const OWNER_PASSWORD = 'TestPass123!';
 const CASHIER_EMAIL = `e2e-cashier-${RUN}@test.local`;
@@ -61,7 +65,8 @@ describe('POS API (e2e)', () => {
     // API-client mode: tokens in the body, bearer auth (see auth/session-cookie.ts)
     let req = request(app.getHttpServer())
       [method](`/api/v1${path}`)
-      .set('X-Auth-Mode', 'token');
+      .set('X-Auth-Mode', 'token')
+      .set('X-Device-Id', DEVICE);
     if (bearer) req = req.set('Authorization', `Bearer ${bearer}`);
     return body ? req.send(body) : req;
   };
@@ -87,7 +92,10 @@ describe('POS API (e2e)', () => {
     // Throwaway tenant + owner, created straight in the database
     dataSource = app.get(DataSource);
     const [tenant] = await dataSource.query<{ id: string }[]>(
-      `INSERT INTO tenants (name, slug, status) VALUES ($1, $2, 'active') RETURNING id`,
+      // Sales without a cash session here (the default asks for one; the
+      // shift tests open theirs)
+      `INSERT INTO tenants (name, slug, status, settings)
+       VALUES ($1, $2, 'active', '{"requireOpenShift": false}') RETURNING id`,
       [`E2E Test Store ${RUN}`, `e2e-test-store-${RUN}`],
     );
     tenantId = tenant.id;
@@ -138,6 +146,7 @@ describe('POS API (e2e)', () => {
       r = await request(server)
         .post('/api/v1/auth/login')
         .set('X-Requested-With', 'pos-web')
+        .set('X-Device-Id', DEVICE)
         .send({ email: OWNER_EMAIL, password: OWNER_PASSWORD });
       expect(r.status).toBe(200);
       expect(r.body.accessToken).toBeUndefined();
@@ -179,6 +188,17 @@ describe('POS API (e2e)', () => {
         .get('/api/v1/auth/stores')
         .set('Cookie', cookie);
       expect(r.status).toBe(401);
+    });
+
+    it('signs the API client in again (the web sign-in replaced its session)', async () => {
+      const r = await api(
+        'post',
+        '/auth/login',
+        { email: OWNER_EMAIL, password: OWNER_PASSWORD },
+        null,
+      );
+      expect(r.status).toBe(200);
+      token = r.body.accessToken;
     });
 
     it('rejects a wrong password', async () => {
@@ -543,11 +563,19 @@ describe('POS API (e2e)', () => {
     });
 
     it('accepts an offline sale at the price charged, even past zero stock', async () => {
+      // A till sells offline under its signed lease (a sale without one waits for review)
+      const device = await api('post', '/devices/register', { registerId });
+      expect(device.status).toBe(201);
+      const issued = await api('post', `/devices/${device.body.id}/lease`, {
+        registerId,
+      });
+      expect(issued.status).toBe(200);
       const payload = {
         registerId,
         items: [{ variantId: tea, quantity: 10, unitPrice: 2.5 }],
         payments: [{ paymentMethodId: cash, amount: 30 }],
-        offlineCapturedAt: new Date(Date.now() - 3600e3).toISOString(),
+        // Captured under the lease, a moment ago
+        offlineCapturedAt: new Date(Date.now() - 1000).toISOString(),
         idempotencyKey: `${key}-off`,
       };
       let r = await api('post', '/sync/push', {
@@ -559,6 +587,7 @@ describe('POS API (e2e)', () => {
             schemaVersion: 1,
             payloadHash: payloadHash(payload),
             payload,
+            lease: issued.body.lease,
           },
         ],
       });

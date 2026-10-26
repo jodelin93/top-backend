@@ -116,6 +116,8 @@ export interface ReceiveAuth {
 // A line as it should be on the order (create, revise, revert)
 type DesiredLine = Omit<PurchaseOrderSnapshotLine, 'quantityReceived'>;
 
+const RECEIPT_COST_MESSAGE =
+  'A received cost is more than 10% away from the order\'s cost. Someone with "Approve purchase orders" must authorise it.';
 const OVER_RECEIPT_MESSAGE =
   'This delivery is more than the order allows (over-receipt tolerance). Someone with "Approve purchase orders" must authorise it.';
 
@@ -808,6 +810,10 @@ export class PurchaseOrdersService {
         if (overTolerance && !overApproverId) {
           throw approvalRequired('purchasing.approve', OVER_RECEIPT_MESSAGE);
         }
+        const costChanged = plan.costChanges.length > 0;
+        if (costChanged && !overApproverId) {
+          throw approvalRequired('purchasing.approve', RECEIPT_COST_MESSAGE);
+        }
 
         const receipt = await this.createReceipt(manager, {
           tenantId,
@@ -858,7 +864,8 @@ export class PurchaseOrdersService {
             action: 'purchase_order.received',
             entityType: 'purchase_order',
             entityId: po.id,
-            approverId: overTolerance ? overApproverId : undefined,
+            approverId:
+              overTolerance || costChanged ? overApproverId : undefined,
             metadata: {
               poNumber: po.poNumber,
               receiptNumber: receipt.receiptNumber,
@@ -868,6 +875,7 @@ export class PurchaseOrdersService {
               status: po.status,
               overReceipt: plan.overTolerance,
               tolerancePercent: tolerance,
+              costChanges: plan.costChanges,
               lines: plan.lines.map((l) => ({
                 variantId: l.item.variantId,
                 quantity: l.quantity,

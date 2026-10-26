@@ -411,7 +411,9 @@ withStore('Ad-hoc receipt retried', (store) => {
         idempotencyKey: key,
       });
     const both = await Promise.all([receive(), receive()]);
-    expect(both.map((r) => [r.status, ok(r.status) ? '' : JSON.stringify(r.body)])).toEqual([
+    expect(
+      both.map((r) => [r.status, ok(r.status) ? '' : JSON.stringify(r.body)]),
+    ).toEqual([
       [both[0].status, ''],
       [both[1].status, ''],
     ]);

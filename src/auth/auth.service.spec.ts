@@ -104,8 +104,8 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('refuses a user signed in on another device, before any second factor', async () => {
-      userRepository.findOne.mockResolvedValue(user({ mfaEnabled: true }));
+    it('refuses a user signed in on another device', async () => {
+      userRepository.findOne.mockResolvedValue(user());
       sessionsService.claimSingleSession.mockRejectedValueOnce(
         new ConflictException({ code: 'SESSION_ACTIVE' }),
       );
@@ -113,7 +113,6 @@ describe('AuthService', () => {
         service.login('owner@example.com', 'Password123!'),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(sessionsService.claimSingleSession).toHaveBeenCalledWith('u1');
-      expect(jwtService.sign).not.toHaveBeenCalled();
       expect(sessionsService.create).not.toHaveBeenCalled();
     });
 
@@ -147,7 +146,7 @@ describe('AuthService', () => {
         role: MembershipRole.OWNER,
       });
       // Owners always hold every permission
-      expect(result.user.permissions).toEqual(ALL_PERMISSIONS);
+      expect(result.user!.permissions).toEqual(ALL_PERMISSIONS);
       expect(userRepository.update).toHaveBeenCalledWith('u1', {
         lastLoginAt: expect.any(Date) as Date,
       });
@@ -193,6 +192,9 @@ describe('AuthService', () => {
       );
       expect(userRepository.update).not.toHaveBeenCalled();
       expect(sessionsService.create).not.toHaveBeenCalled();
+      // Nothing about the account, and no other device signed out, before the code
+      expect(result.user).toBeUndefined();
+      expect(sessionsService.claimSingleSession).not.toHaveBeenCalled();
     });
 
     it('gives privileged users a restricted token when the store requires two-factor', async () => {
@@ -201,7 +203,7 @@ describe('AuthService', () => {
       const result = await service.login('owner@example.com', 'Password123!');
 
       expect(result.mfaSetupRequired).toBe(true);
-      expect(result.user.mfaSetupRequired).toBe(true);
+      expect(result.user!.mfaSetupRequired).toBe(true);
       expect(jwtService.sign).toHaveBeenCalledWith(
         expect.objectContaining({ scope: 'mfa_setup', sid: 'sid-1' }),
       );
@@ -229,7 +231,7 @@ describe('AuthService', () => {
         Object.assign(user(), { sessionId: 's1', tenantId: 't1' }),
         't2',
       );
-      expect(result.user.tenantId).toBe('t2');
+      expect(result.user!.tenantId).toBe('t2');
       expect(jwtService.sign).toHaveBeenCalledWith(
         expect.objectContaining({ sid: 's1', tid: 't2' }),
       );
@@ -265,6 +267,20 @@ describe('AuthService', () => {
       expect(jwtService.sign).toHaveBeenCalledWith(
         expect.objectContaining({ mfaVerified: true }),
       );
+    });
+
+    it('checks the other signed-in device only once the code is right', async () => {
+      userRepository.findOne.mockResolvedValue(
+        user({ mfaEnabled: true, mfaSecret: secret }),
+      );
+      sessionsService.claimSingleSession.mockRejectedValueOnce(
+        new ConflictException({ code: 'SESSION_ACTIVE' }),
+      );
+      const code = speakeasy.totp({ secret, encoding: 'base32' });
+      await expect(service.verifyMfaToken('u1', code)).rejects.toBeInstanceOf(
+        ConflictException,
+      );
+      expect(sessionsService.create).not.toHaveBeenCalled();
     });
 
     it('rejects a wrong code', async () => {
@@ -342,8 +358,25 @@ describe('AuthService', () => {
   describe('account security', () => {
     it('will not replace the secret of an active second factor', async () => {
       userRepository.findOne.mockResolvedValue(user({ mfaEnabled: true }));
-      await expect(service.enableMfa('u1')).rejects.toThrow(/already on/);
+      await expect(service.enableMfa('u1', 'Password123!')).rejects.toThrow(
+        /already on/,
+      );
       expect(userRepository.update).not.toHaveBeenCalled();
+    });
+
+    it('sets up a second factor only with the current password', async () => {
+      userRepository.findOne.mockResolvedValue(user());
+      await expect(service.enableMfa('u1', 'wrong')).rejects.toThrow(
+        'Your current password is incorrect',
+      );
+      expect(userRepository.update).not.toHaveBeenCalled();
+
+      const setup = await service.enableMfa('u1', 'Password123!');
+      expect(setup.secret).toBeTruthy();
+      expect(userRepository.update).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ mfaSecret: setup.secret }),
+      );
     });
 
     it('changes the password only with the current one, signing out other sessions', async () => {

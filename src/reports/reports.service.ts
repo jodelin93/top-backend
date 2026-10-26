@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource, EntityManager } from 'typeorm';
 import { withReportTimeout } from './report-timeout';
+import { inStoreTime } from './report-period';
 import { SettingsService } from '../settings/settings.service';
 import { ReportQueryDto } from './reports.dto';
 import {
@@ -119,8 +120,14 @@ export class ReportsService {
     permissions: readonly string[] = [],
     scope?: ReportScope,
   ) {
-    return withReportTimeout(this.dataSource, (manager) =>
-      this.summaryIn(manager, tenantId, query, permissions, scope),
+    return withReportTimeout(this.dataSource, async (manager) =>
+      this.summaryIn(
+        manager,
+        tenantId,
+        await inStoreTime(manager, tenantId, query),
+        permissions,
+        scope,
+      ),
     );
   }
 

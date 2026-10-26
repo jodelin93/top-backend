@@ -467,7 +467,13 @@ describe('Branch-level access (AC15)', () => {
         {},
         {},
         {
-          getRepository: () => ({ exists: jest.fn().mockResolvedValue(true) }),
+          getRepository: () => ({
+            exists: jest.fn().mockResolvedValue(true),
+            findOne: jest.fn().mockResolvedValue({
+              id: 'loc-b',
+              warehouse: { warehouseType: 'store' },
+            }),
+          }),
           manager: locationManager(),
         },
       ]);
@@ -514,7 +520,7 @@ describe('Branch-level access (AC15)', () => {
             reportKey: 'sales-by-day',
             scope: jobScope ? { branchIds: jobScope } : null,
           },
-          ['reports.view', 'reports.export', 'sales.view'],
+          ['reports.view', 'reports.export', 'sales.view', 'sales.view.all'],
           userScope ? { branchIds: userScope } : undefined,
         );
       expect(may([A], [A])).not.toThrow();

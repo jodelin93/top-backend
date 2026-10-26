@@ -119,6 +119,26 @@ describe('ApprovalsService', () => {
     memberships.exists.mockResolvedValue(true);
   });
 
+  it("refuses an approver limited to other branches than the requester's", async () => {
+    memberships.findOne.mockResolvedValueOnce({
+      role: 'manager',
+      branchIds: ['b1'],
+    } as never);
+    await expect(
+      requestContext.run({ branchIds: ['b1', 'b2'] }, () => approve()),
+    ).rejects.toThrow(
+      "The approver does not work in all of the requester's branches",
+    );
+
+    memberships.findOne.mockResolvedValueOnce({
+      role: 'manager',
+      branchIds: ['b1', 'b2'],
+    } as never);
+    await expect(
+      requestContext.run({ branchIds: ['b2'] }, () => approve()),
+    ).resolves.toHaveProperty('approvalToken');
+  });
+
   it('issues a short-lived token with a unique id', async () => {
     const a = await approve();
     const b = await approve();

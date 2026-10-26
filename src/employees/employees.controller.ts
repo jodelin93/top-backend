@@ -98,6 +98,7 @@ export class EmployeesController {
       tenantId,
       attendanceId,
       dto,
+      user,
       branchScope(user),
     );
   }

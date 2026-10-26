@@ -6,6 +6,7 @@ import {
   netUnitCost,
   outstandingQuantity,
   planReceipt,
+  costBeyondTolerance,
   planShortClose,
   revisionError,
   statusAfterReceipt,
@@ -217,6 +218,14 @@ describe('goods receipt planning', () => {
     },
   ];
 
+  it('flags a receipt cost more than 10% away from the order cost', () => {
+    expect(costBeyondTolerance(10, 11)).toBe(false);
+    expect(costBeyondTolerance(10, 11.01)).toBe(true);
+    expect(costBeyondTolerance(10, 8.99)).toBe(true);
+    // No order cost to compare with
+    expect(costBeyondTolerance(0, 50)).toBe(false);
+  });
+
   it('receives part of the outstanding quantity at the order cost', () => {
     const plan = planReceipt(items, [
       { purchaseOrderItemId: 'l1', quantity: 6 },
@@ -242,6 +251,8 @@ describe('goods receipt planning', () => {
         },
       ],
       overTolerance: [],
+      // 3.5 against an order cost of 3: past the 10% tolerance
+      costChanges: ['v2'],
     });
   });
 

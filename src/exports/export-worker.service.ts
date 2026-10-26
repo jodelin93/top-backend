@@ -21,6 +21,7 @@ import { CONTENT_TYPES } from '../reports/report-files';
 import { resolvePermissions } from '../roles/role-permissions';
 import { isBranchSubset, membershipBranchIds } from '../auth/branch-scope';
 import type { RunReportQueryDto } from '../reports/reports.dto';
+import { inStoreTime } from '../reports/report-period';
 import {
   DEFAULT_FILE_TTL_HOURS,
   ExportJobRow,
@@ -141,7 +142,11 @@ export class ExportWorkerService
       if (!isBranchSubset(job.scope?.branchIds ?? null, current)) {
         throw new Error('The user no longer has access to these branches');
       }
-      const params = job.params as RunReportQueryDto;
+      const params = await inStoreTime(
+        this.dataSource,
+        job.tenantId,
+        job.params as RunReportQueryDto,
+      );
       const prepared = this.runner.prepare(
         job.tenantId,
         job.reportKey,

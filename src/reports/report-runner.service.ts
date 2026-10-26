@@ -11,6 +11,7 @@ import {
   REPORTS,
   ReportColumn,
   ReportDefinition,
+  type ReportGroup,
 } from './report-definitions';
 import { RunReportQueryDto, type ExportFormat } from './reports.dto';
 import {
@@ -29,6 +30,7 @@ import {
 } from './report-files';
 import type { Writable } from 'stream';
 import { withReportTimeout } from './report-timeout';
+import { inStoreTime } from './report-period';
 
 type Row = Record<string, unknown>;
 
@@ -75,13 +77,41 @@ export const visibleColumns = (
   );
 
 /** May run the report: reports.view (checked by the controller) + any one of `requires` */
-export const canRunReport = (
-  report: Pick<ReportDefinition, 'requires'>,
+// Reports over everyone's sales, payments and customers: a role limited to its
+// own sales (no sales.view.all) would see there what its sales list hides
+const ALL_SALES_GROUPS: readonly ReportGroup[] = [
+  'Sales',
+  'Payments & tax',
+  'Returns & voids',
+  'Cash',
+  'Customers',
+];
+
+const seesAllSales = (
+  report: Pick<ReportDefinition, 'group'>,
   permissions: readonly string[],
 ) =>
-  !report.requires ||
-  report.requires.length === 0 ||
-  report.requires.some((permission) => permissions.includes(permission));
+  !ALL_SALES_GROUPS.includes(report.group) ||
+  permissions.includes('sales.view.all');
+
+const ALL_SALES_MESSAGE =
+  'This report covers every sale: it needs the permission to view all sales';
+
+/** Store-wide sales figures (dashboard, daily summary, reconciliation) */
+export function assertSeesAllSales(permissions: readonly string[] = []) {
+  if (!permissions.includes('sales.view.all')) {
+    throw new ForbiddenException(ALL_SALES_MESSAGE);
+  }
+}
+
+export const canRunReport = (
+  report: Pick<ReportDefinition, 'requires' | 'group'>,
+  permissions: readonly string[],
+) =>
+  seesAllSales(report, permissions) &&
+  (!report.requires ||
+    report.requires.length === 0 ||
+    report.requires.some((permission) => permissions.includes(permission)));
 
 /**
  * Totals row. Counts are always summed; money only when every row is in the
@@ -156,6 +186,9 @@ export class ReportRunnerService {
     scope?: ReportScope,
   ): PreparedReport {
     const report = this.find(key);
+    if (!seesAllSales(report, permissions)) {
+      throw new ForbiddenException(ALL_SALES_MESSAGE);
+    }
     if (!canRunReport(report, permissions)) {
       throw new ForbiddenException(
         `You need one of these permissions for this report: ${report.requires!.join(', ')}`,
@@ -207,7 +240,13 @@ export class ReportRunnerService {
     permissions: readonly string[] = [],
     scope?: ReportScope,
   ): Promise<ReportResult> {
-    const prepared = this.prepare(tenantId, key, query, permissions, scope);
+    const prepared = this.prepare(
+      tenantId,
+      key,
+      await inStoreTime(this.dataSource, tenantId, query),
+      permissions,
+      scope,
+    );
     const raw = await withReportTimeout(this.dataSource, (manager) =>
       manager.query<Row[]>(prepared.sql, prepared.values),
     );

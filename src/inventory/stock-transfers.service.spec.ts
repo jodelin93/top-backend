@@ -284,6 +284,15 @@ describe('StockTransfersService: conservation through the transit location', () 
     expect(ledger.balance(DEST)).toBe(6);
     expect(ledger.balance(QUARANTINE)).toBe(2);
     expect(ledger.balance(TRANSIT)).toBe(2);
+    // At this transfer's own dispatch cost, not the oldest units in transit
+    expect(ledger.inventory.moveBetween).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        fromLocationId: TRANSIT,
+        toLocationId: DEST,
+        inboundCost: Number(items[0].unitCost),
+      }),
+    );
     expect(items[0]).toMatchObject({
       quantityDispatched: 10,
       quantityReceived: 6,

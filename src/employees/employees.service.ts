@@ -24,6 +24,8 @@ import {
   branchFilterSql,
   branchScope,
   canAccessBranch,
+  isBranchSubset,
+  membershipBranchIds,
 } from '../auth/branch-scope';
 import { AuditService } from '../audit/audit.service';
 import { UsersService } from '../users/users.service';
@@ -65,6 +67,16 @@ const EDITABLE = [
   'hireDate',
   'notes',
 ] as const;
+
+// Personal details are not copied into the audit trail (kept for years, read
+// by auditors): only whether they are set, and which ones changed
+const PRIVATE = ['phone', 'email', 'notes'] as const;
+
+function auditView(employee: Employee) {
+  const view: Record<string, unknown> = pick(employee, EDITABLE);
+  for (const key of PRIVATE) view[key] = employee[key] ? '(hidden)' : null;
+  return view;
+}
 
 /**
  * Employees (HR records) separate from logins (spec §13): branch assignments,
@@ -158,7 +170,7 @@ export class EmployeesService {
     try {
       const id = await this.dataSource.transaction(async (manager) => {
         if (dto.userId)
-          await this.assertLinkable(manager, tenantId, dto.userId);
+          await this.assertLinkable(manager, tenantId, dto.userId, scope);
         const repo = manager.getRepository(Employee);
         const employee = await repo.save(
           repo.create({
@@ -189,7 +201,7 @@ export class EmployeesService {
             entityId: employee.id,
             changes: {
               after: {
-                ...pick(employee, EDITABLE),
+                ...auditView(employee),
                 userId: employee.userId,
                 branches,
               },
@@ -215,9 +227,10 @@ export class EmployeesService {
       await this.dataSource.transaction(async (manager) => {
         const employee = await this.load(manager, tenantId, id, true, scope);
         const before = {
-          ...pick(employee, EDITABLE),
+          ...auditView(employee),
           branches: branchList(employee.branches),
         };
+        const privateBefore = pick(employee, PRIVATE);
         if (dto.firstName !== undefined)
           employee.firstName = dto.firstName.trim();
         if (dto.lastName !== undefined) employee.lastName = dto.lastName.trim();
@@ -253,7 +266,13 @@ export class EmployeesService {
             entityId: id,
             changes: {
               before,
-              after: { ...pick(employee, EDITABLE), branches },
+              after: { ...auditView(employee), branches },
+            },
+            metadata: {
+              privateFieldsChanged: PRIVATE.filter(
+                (key) =>
+                  (privateBefore[key] ?? null) !== (employee[key] ?? null),
+              ),
             },
           },
           manager,
@@ -309,7 +328,7 @@ export class EmployeesService {
       await this.dataSource.transaction(async (manager) => {
         const employee = await this.load(manager, tenantId, id, true, scope);
         if (employee.userId === userId) return;
-        await this.assertLinkable(manager, tenantId, userId, id);
+        await this.assertLinkable(manager, tenantId, userId, scope, id);
         const previous = employee.userId;
         await manager
           .getRepository(Employee)
@@ -600,6 +619,12 @@ export class EmployeesService {
           false,
           scope,
         );
+        // Paid hours are never typed in for oneself: another manager does it
+        if (employee.userId && employee.userId === actor.id) {
+          throw new ForbiddenException(
+            'Ask another manager to record your own hours',
+          );
+        }
         // A branch-limited user records shifts at their own branches only (a
         // record without a branch would be outside their reach); by default at
         // the employee's first branch among theirs
@@ -663,6 +688,7 @@ export class EmployeesService {
     tenantId: string,
     attendanceId: string,
     dto: CloseAttendanceDto,
+    actor: Pick<AuthUser, 'id'>,
     scope: BranchScope = branchScope(),
   ) {
     const record = await this.dataSource.transaction(async (manager) => {
@@ -678,6 +704,16 @@ export class EmployeesService {
         !(await this.isVisible(manager, found.employeeId, scope))
       ) {
         throw new NotFoundException('Attendance record not found');
+      }
+      // Closing one's own clock-in by hand would set one's own paid hours
+      const employee = await manager.getRepository(Employee).findOne({
+        where: { id: found.employeeId, tenantId },
+        select: { id: true, userId: true },
+      });
+      if (employee?.userId && employee.userId === actor.id) {
+        throw new ForbiddenException(
+          'Ask another manager to record your own hours',
+        );
       }
       if (found.clockOut) {
         throw new ConflictException('This record is already clocked out');
@@ -841,12 +877,15 @@ export class EmployeesService {
     manager: EntityManager,
     tenantId: string,
     userId: string,
+    scope: BranchScope,
     employeeId?: string,
   ) {
     const member = await manager
       .getRepository(TenantMembership)
       .findOne({ where: { tenantId, userId } });
-    if (!member) {
+    // A branch-limited user links only accounts working within their branches
+    // (never the owner's, nor another branch's: the link shows its e-mail)
+    if (!member || !isBranchSubset(membershipBranchIds(member), scope)) {
       throw new BadRequestException(
         'This account is not a member of the store',
       );

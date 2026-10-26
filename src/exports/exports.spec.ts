@@ -26,8 +26,12 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 const USER = '22222222-2222-2222-2222-222222222222';
 const JOB = '33333333-3333-3333-3333-333333333333';
 const SECRET = 'x'.repeat(40);
-const EXPORTER = ['reports.view', 'reports.export'];
-const RANGE = { from: '2026-09-01T00:00:00Z', to: '2026-09-30T23:59:59Z' };
+const EXPORTER = ['reports.view', 'reports.export', 'sales.view.all'];
+const RANGE = {
+  from: '2026-09-01T00:00:00Z',
+  to: '2026-09-30T23:59:59Z',
+  timezone: 'UTC',
+};
 
 const config = {
   get: (name: string) => (name === 'JWT_SECRET' ? SECRET : undefined),

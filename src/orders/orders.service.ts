@@ -24,7 +24,11 @@ import { Register } from '../database/entities/register.entity';
 import { Branch } from '../database/entities/branch.entity';
 import { CashMovementType } from '../database/entities/cash-movement.entity';
 import type { AuthUser } from '../auth/strategies/jwt.strategy';
-import { assertRegisterAccess, scopedBranchIds } from '../auth/branch-scope';
+import {
+  assertRegisterAccess,
+  registerBranchId,
+  scopedBranchIds,
+} from '../auth/branch-scope';
 import { requestContext } from '../common/context/request-context';
 import { SalesService } from '../sales/sales.service';
 import { ShiftsService } from '../shifts/shifts.service';
@@ -33,6 +37,7 @@ import { AuditService } from '../audit/audit.service';
 import { specialTenderOf } from '../sales/special-tenders';
 import { LOYALTY_METHOD_CODE } from '../loyalty/loyalty.service';
 import { round2 } from '../sales/sale-calculator';
+import { subMoney, sumMoney } from '../purchasing/money';
 import { exchangeRate, toSaleCurrency } from '../currency/currency-math';
 import {
   branchDocumentPrefix,
@@ -392,7 +397,15 @@ export class OrdersService {
   ) {
     const approverId = requestContext.get()?.approverId ?? null;
     // Not found (or another branch's) before anything else
-    await findVisibleOrder(this.dataSource.manager, tenantId, id);
+    const current = await findVisibleOrder(
+      this.dataSource.manager,
+      tenantId,
+      id,
+    );
+    // A retried cancel (lost answer, double click) gets the cancelled order
+    if (current.status === CustomerOrderStatus.CANCELLED) {
+      return this.findOne(tenantId, id);
+    }
     // Only for a deposit whose way of paying can no longer be used
     const fallback =
       dto.deposits === 'refund' && dto.refundMethodId
@@ -816,6 +829,17 @@ export class OrdersService {
         input.registerId,
         'Register not found',
       );
+      // The order's money stays in its own branch's tills, as at pickup
+      const branchId = await registerBranchId(
+        manager,
+        order.tenantId,
+        input.registerId,
+      );
+      if (branchId !== order.branchId) {
+        throw new BadRequestException(
+          "Choose a register of the order's branch",
+        );
+      }
     }
     let shift = input.registerId
       ? await this.shiftsService.getOpenShift(
@@ -852,9 +876,10 @@ export class OrdersService {
         idempotencyKey: input.idempotencyKey ?? null,
       }),
     );
-    const paidAmount = round2(
-      Number(order.paidAmount) + (deposit ? payment.amount : -payment.amount),
-    );
+    // Exact to the cent (D012)
+    const paidAmount = deposit
+      ? sumMoney([Number(order.paidAmount), payment.amount])
+      : subMoney(Number(order.paidAmount), payment.amount);
     if (paidAmount < 0) {
       throw new BadRequestException('More than the deposits paid');
     }

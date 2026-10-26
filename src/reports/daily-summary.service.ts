@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { ReportsService } from './reports.service';
 import { ReportRunnerService } from './report-runner.service';
 import { DailySummaryQueryDto } from './reports.dto';
+import { storeTimezone } from './report-period';
 import type { ReportColumn } from './report-definitions';
 import type { ReportScope } from './report-sql';
 import { pdfBuffer, pdfHeader, pdfSection, pdfTable } from './report-files';
@@ -49,7 +50,9 @@ export class DailySummaryService {
     permissions: readonly string[] = [],
     scope?: ReportScope,
   ): Promise<{ filename: string; contentType: string; body: Buffer }> {
-    const timezone = query.timezone ?? 'UTC';
+    const timezone =
+      query.timezone ??
+      (await storeTimezone(this.dataSource, tenantId, query.branchId));
     // The local calendar day in the store's time zone
     const [day] = await this.dataSource.query<{ from: Date; to: Date }[]>(
       `SELECT ($1::date::timestamp AT TIME ZONE $2) AS "from",

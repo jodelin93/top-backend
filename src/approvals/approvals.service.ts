@@ -16,6 +16,12 @@ import {
 import { TenantRole } from '../database/entities/tenant-role.entity';
 import { isPermission, Permission } from '../auth/permissions';
 import { resolvePermissions } from '../roles/role-permissions';
+import {
+  BranchScope,
+  branchScope,
+  isBranchSubset,
+  membershipBranchIds,
+} from '../auth/branch-scope';
 import { AuditService } from '../audit/audit.service';
 import { RequestApprovalDto } from './approvals.dto';
 import { currentApprovalScope, normaliseAction } from './approval-scope';
@@ -142,7 +148,7 @@ export class ApprovalsService {
     }
     await clearFailedAttempts(this.userRepository, approver.id);
 
-    const permissions = await this.permissionsOf(
+    const { permissions, branchIds } = await this.permissionsOf(
       approver.id,
       requester.tenantId,
     );
@@ -150,6 +156,13 @@ export class ApprovalsService {
       await deny('permission not held', approver.id);
       throw new ForbiddenException(
         'The approver is not allowed to authorise this action',
+      );
+    }
+    // A manager limited to some branches approves only for people working there
+    if (!isBranchSubset(branchScope(), branchIds)) {
+      await deny('branch not covered', approver.id);
+      throw new ForbiddenException(
+        "The approver does not work in all of the requester's branches",
       );
     }
 
@@ -215,9 +228,13 @@ export class ApprovalsService {
       return null;
     }
 
-    // The approver must still hold the permission (role may have changed since)
-    const permissions = await this.permissionsOf(payload.sub, payload.tenantId);
+    // The approver must still hold the permission and the branches (role may have changed since)
+    const { permissions, branchIds } = await this.permissionsOf(
+      payload.sub,
+      payload.tenantId,
+    );
     if (!permissions.includes(permission)) return null;
+    if (!isBranchSubset(branchScope(), branchIds)) return null;
 
     // Already checked (and claimed if needed) earlier in this request
     if (scope?.claimed.includes(payload.jti)) return payload.sub;
@@ -276,14 +293,17 @@ export class ApprovalsService {
   private async permissionsOf(
     userId: string,
     tenantId: string,
-  ): Promise<Permission[]> {
+  ): Promise<{ permissions: Permission[]; branchIds: BranchScope }> {
     const membership = await this.membershipRepository.findOne({
       where: { userId, tenantId, status: MembershipStatus.ACTIVE },
     });
-    if (!membership) return [];
+    if (!membership) return { permissions: [], branchIds: [] };
     const role = await this.roleRepository.findOne({
       where: { tenantId, key: membership.role },
     });
-    return resolvePermissions(membership.role, role);
+    return {
+      permissions: resolvePermissions(membership.role, role),
+      branchIds: membershipBranchIds(membership),
+    };
   }
 }

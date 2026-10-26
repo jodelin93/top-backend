@@ -19,7 +19,10 @@ describe('AuthController', () => {
     switchStore: jest.fn(),
     logout: jest.fn(),
   };
-  const passwordResetService = { request: jest.fn(), reset: jest.fn() };
+  const passwordResetService = {
+    request: jest.fn().mockResolvedValue(undefined),
+    reset: jest.fn(),
+  };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -235,8 +238,8 @@ describe('AuthController', () => {
     expect(authService.getUserInfo).toHaveBeenCalledWith(user, 't1');
   });
 
-  it('asks for a reset link with the email, language and client IP', async () => {
-    await controller.forgotPassword({ email: 'a@b.com', language: 'fr' }, {
+  it('asks for a reset link with the email, language and client IP', () => {
+    controller.forgotPassword({ email: 'a@b.com', language: 'fr' }, {
       ip: '1.2.3.4',
     } as unknown as Request);
     expect(passwordResetService.request).toHaveBeenCalledWith(

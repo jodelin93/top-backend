@@ -226,6 +226,21 @@ export interface PlannedReceiptLine {
   unitCost: number;
 }
 
+/**
+ * A receipt cost this far (in %) from the order's cost needs purchasing.approve:
+ * it feeds the average cost and the supplier's last cost
+ */
+export const RECEIPT_COST_TOLERANCE_PERCENT = 10;
+
+/** Is the receipt's unit cost too far from the order's? (no order cost: never) */
+export function costBeyondTolerance(orderCost: number, receiptCost: number) {
+  if (!(orderCost > 0)) return false;
+  return (
+    Math.abs(receiptCost - orderCost) * 100 >
+    orderCost * RECEIPT_COST_TOLERANCE_PERCENT
+  );
+}
+
 export interface OverReceipt {
   itemId: string;
   variantId: string;
@@ -245,12 +260,18 @@ export function planReceipt(
   lines: ReceiptLineInput[],
   tolerancePercent = 0,
 ):
-  | { lines: PlannedReceiptLine[]; overTolerance: OverReceipt[] }
+  | {
+      lines: PlannedReceiptLine[];
+      overTolerance: OverReceipt[];
+      // Lines costed far from the order (variant ids)
+      costChanges: string[];
+    }
   | { error: string } {
   const byId = new Map(items.map((item) => [item.id, item]));
   const seen = new Set<string>();
   const planned: PlannedReceiptLine[] = [];
   const overTolerance: OverReceipt[] = [];
+  const costChanges: string[] = [];
   for (const line of lines) {
     const item = byId.get(line.purchaseOrderItemId);
     if (!item) return { error: 'A receipt line is not on this purchase order' };
@@ -280,6 +301,13 @@ export function planReceipt(
         maxWithinTolerance: max,
       });
     }
+    if (
+      line.unitCost !== undefined &&
+      line.unitCost !== null &&
+      costBeyondTolerance(item.unitCost, line.unitCost)
+    ) {
+      costChanges.push(item.variantId);
+    }
     planned.push({
       item,
       quantity: line.quantity,
@@ -292,7 +320,7 @@ export function planReceipt(
   if (planned.length === 0) {
     return { error: 'Nothing to receive' };
   }
-  return { lines: planned, overTolerance };
+  return { lines: planned, overTolerance, costChanges };
 }
 
 /**

@@ -2942,6 +2942,17 @@ describe('SalesService', () => {
       );
     });
 
+    it("hides another cashier's sale from a user without sales.view.all", async () => {
+      completed({ shiftId: 'shift-1', userId: 'someone-else' });
+      await expect(
+        requestContext.run(
+          { userId: 'cashier', permissions: ['sales.void'] },
+          () => service.void(TENANT, USER, 'sale-1', 'Mistake'),
+        ),
+      ).rejects.toThrow('Sale not found');
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+
     it('refuses once the shift is closed', async () => {
       completed({ shiftId: 'shift-1' });
       repo(Shift).findOne.mockResolvedValue({

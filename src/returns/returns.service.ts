@@ -15,7 +15,7 @@ import {
   branchScope,
   canAccessBranch,
 } from '../auth/branch-scope';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Not, Repository } from 'typeorm';
 import {
   addQty,
   QuantityUnit,
@@ -32,6 +32,7 @@ import {
 } from '../database/entities/payment-method.entity';
 import { Register, RegisterStatus } from '../database/entities/register.entity';
 import { InventoryLocation } from '../database/entities/inventory-location.entity';
+import { WarehouseType } from '../database/entities/warehouse.entity';
 import { MovementType } from '../database/entities/stock-movement.entity';
 import { CashMovementType } from '../database/entities/cash-movement.entity';
 import {
@@ -419,8 +420,13 @@ export class ReturnsService {
         });
 
         if (locationIds.size > 0) {
+          // Never into the transit location (its units belong to transfers)
           const found = await manager.count(InventoryLocation, {
-            where: { tenantId, id: In([...locationIds]) },
+            where: {
+              tenantId,
+              id: In([...locationIds]),
+              warehouse: { warehouseType: Not(WarehouseType.TRANSIT) },
+            },
           });
           if (found !== locationIds.size)
             throw new BadRequestException('Stock location not found');

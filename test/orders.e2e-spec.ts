@@ -159,6 +159,43 @@ describe('orders with a deposit', () => {
     expect(shift.body.shift.sales.orderDeposits.received).toBe(5_000);
   });
 
+  it("takes deposits through the order's own branch tills only", async () => {
+    let r = await s.api('post', '/branches', {
+      code: `OB${RUN}`.slice(0, 20),
+      name: 'Other branch',
+      currencyCode: 'HTG',
+    });
+    expect(r.status).toBe(201);
+    const branchId = r.body.id;
+    r = await s.api('post', '/warehouses', {
+      code: `OW${RUN}`.slice(0, 20),
+      name: 'Other warehouse',
+    });
+    expect(r.status).toBe(201);
+    r = await s.api('post', '/locations', {
+      warehouseId: r.body.id,
+      code: 'OL',
+      name: 'Other shelf',
+    });
+    expect(r.status).toBe(201);
+    r = await s.api('post', '/registers', {
+      branchId,
+      code: `OR${RUN}`.slice(0, 20),
+      name: 'Other till',
+      defaultLocationId: r.body.id,
+    });
+    expect(r.status).toBe(201);
+
+    const elsewhere = await s.api('post', `/orders/${orderId}/deposits`, {
+      registerId: r.body.id,
+      paymentMethodId: s.methods.CARD,
+      amount: 10,
+      reference: 'AUTH-X',
+    });
+    expect(elsewhere.status).toBe(400);
+    expect(elsewhere.body.message).toMatch(/order's branch/);
+  });
+
   it('marks it ready and lists it for the till', async () => {
     const r = await s.api('post', `/orders/${orderId}/status`, {
       status: 'ready',
@@ -261,7 +298,11 @@ describe('orders with a deposit', () => {
       { amount: 4_000, type: 'refund' },
     ]);
     const refunds = (
-      r.body.payments as { type: string; paymentMethodId: string; amount: number }[]
+      r.body.payments as {
+        type: string;
+        paymentMethodId: string;
+        amount: number;
+      }[]
     )
       .filter((p) => p.type === 'refund')
       .map((p) => [p.paymentMethodId, p.amount])
@@ -270,6 +311,15 @@ describe('orders with a deposit', () => {
       [s.methods.CASH, 4_000],
       [s.methods.CARD, 1_000],
     ]);
+    // Sent again (lost answer): the cancelled order, nothing refunded twice
+    const retried = await s.api('post', `/orders/${orderId}/cancel`, {
+      reason: 'Customer changed their mind',
+      deposits: 'refund',
+      registerId: s.registerId,
+    });
+    expect(retried.status).toBe(200);
+    expect(retried.body.status).toBe('cancelled');
+    expect(await paidIn('order_refund')).toHaveLength(1);
     // Nothing more on a cancelled order
     const more = await s.api('post', `/orders/${orderId}/deposits`, {
       registerId: s.registerId,
@@ -307,6 +357,24 @@ describe('orders with a deposit', () => {
     expect(kept.body.paidAmount).toBe(2_000);
   });
 
+  it('runs every report against the database', async () => {
+    const from = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const to = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    const catalog = await s.api('get', '/reports/catalog');
+    expect(catalog.status).toBe(200);
+    for (const report of catalog.body as {
+      key: string;
+      parameters: { key: string; required: boolean }[];
+    }[]) {
+      const params = new URLSearchParams({ from, to });
+      if (report.parameters.some((p) => p.key === 'variantId' && p.required)) {
+        params.set('variantId', serviceId);
+      }
+      const r = await s.api('get', `/reports/${report.key}?${params}`);
+      expect([report.key, r.status]).toEqual([report.key, 200]);
+    }
+  });
+
   it('lists the deposits in the order deposits report', async () => {
     const from = new Date(Date.now() - 86_400_000).toISOString();
     const to = new Date(Date.now() + 86_400_000).toISOString();
@@ -318,6 +386,22 @@ describe('orders with a deposit', () => {
     const rows = r.body.rows as { received: number; refunded: number }[];
     expect(rows.reduce((a, row) => a + Number(row.received), 0)).toBe(7_000);
     expect(rows.reduce((a, row) => a + Number(row.refunded), 0)).toBe(5_000);
+
+    // Whole days of the store's time zone (the branch's), from date-only bounds
+    const day = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+    const days = await s.api(
+      'get',
+      `/reports/order-deposits?from=${day(Date.now() - 86_400_000)}&to=${day(Date.now() + 86_400_000)}`,
+    );
+    expect(days.status).toBe(200);
+    expect(days.body.period.timezone).toBe('UTC');
+    expect(days.body.period.to).toMatch(/T23:59:59\.999Z$/);
+    expect(
+      (days.body.rows as { received: number }[]).reduce(
+        (a, row) => a + Number(row.received),
+        0,
+      ),
+    ).toBe(7_000);
 
     // Money taken, by currency and on the dashboard: deposits when paid, less
     // those given back (7,000 - 5,000); the voided pickup and its deposit tender
@@ -343,7 +427,10 @@ describe('orders with a deposit', () => {
         0,
       ),
     ).toBe(2_000);
-    const summary = await s.api('get', `/reports/summary?from=${from}&to=${to}`);
+    const summary = await s.api(
+      'get',
+      `/reports/summary?from=${from}&to=${to}`,
+    );
     expect(summary.status).toBe(200);
     const tenders = summary.body.byPaymentMethod as {
       code?: string;
@@ -353,7 +440,7 @@ describe('orders with a deposit', () => {
     expect(tenders.reduce((a, row) => a + Number(row.amount), 0)).toBe(2_000);
     expect(tenders.some((row) => /deposit paid/i.test(row.name))).toBe(false);
   });
-  it("returns a pickup sale with no approval: the deposit share goes back the way it was paid", async () => {
+  it('returns a pickup sale with no approval: the deposit share goes back the way it was paid', async () => {
     const r = await takeOrder({
       deposit: { paymentMethodId: s.methods.CARD, amount: 3_000 },
       idempotencyKey: `order-return-${RUN}`,

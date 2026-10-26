@@ -1546,7 +1546,8 @@ export class SalesService implements OnModuleInit {
     id: string,
     reason: string,
   ): Promise<Sale> {
-    const sale = await this.findOne(tenantId, id);
+    // Someone else's sale is "not found" without sales.view.all, as when viewing it
+    const sale = await this.findVisible(tenantId, id);
     assertTransition(sale.status, SaleStatus.VOIDED);
     await this.assertVoidable(tenantId, sale);
     const register = await this.dataSource

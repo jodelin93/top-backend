@@ -553,6 +553,9 @@ export class StockTransfersService {
               fromLocationId: transitId,
               toLocationId: transfer.toLocationId,
               quantity: line.good,
+              // At this transfer's own cost: the shared transit location also
+              // holds other transfers' units, at their costs
+              inboundCost: cost,
               sourceKey: key('good'),
               metadata: meta('receipt'),
             });
@@ -576,6 +579,7 @@ export class StockTransfersService {
                 fromLocationId: transitId,
                 toLocationId: quarantineId,
                 quantity: line.damaged,
+                inboundCost: cost,
                 sourceKey: key('damaged'),
                 metadata: { ...meta('receipt'), condition: 'damaged' },
               });

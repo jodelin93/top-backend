@@ -11,6 +11,7 @@ import {
   shiftInBranch,
   type ReportScope,
 } from './report-sql';
+import { inStoreTime } from './report-period';
 
 type Row = Record<string, unknown>;
 
@@ -275,6 +276,7 @@ export class ReconciliationReportService {
     scope?: ReportScope,
     permissions: readonly string[] | null = null,
   ) {
+    query = await inStoreTime(this.dataSource, tenantId, query);
     const branchIds = branchFilter(query.branchId, scope);
     const params = [tenantId, query.from, query.to, branchIds];
     const execute = (sql: string) => {

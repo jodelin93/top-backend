@@ -13,7 +13,9 @@
  *   npm run seed:demo -- --reset              # wipes that store's data first
  *   OWNER_EMAIL=x@y.com OWNER_PASSWORD=... npm run seed:demo
  *
- * Refuses to run in production, and on a store that already has products unless --reset.
+ * Refuses to run in production, against a remote API or a database whose name doesn't say
+ * dev/test/demo/local (SEED_DEMO_ANYWHERE=1 overrides), and on a store that already has
+ * products unless --reset.
  */
 import 'dotenv/config';
 import pg from 'pg';
@@ -30,6 +32,21 @@ const DAY = 86_400_000;
 if (process.env.NODE_ENV === 'production') {
   console.error('Refusing to seed demo data in production');
   process.exit(1);
+}
+// NODE_ENV alone is not enough: a local .env can point at a hosted database.
+// Demo data goes only to a local API and a database whose name says it is for
+// development, unless SEED_DEMO_ANYWHERE=1 says otherwise on purpose.
+{
+  const localApi = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(API);
+  // modern_pos: the local default of .env.example
+  const devDatabase = /(dev|test|demo|local)|^modern_pos$/i.test(process.env.DB_DATABASE ?? '');
+  if (process.env.SEED_DEMO_ANYWHERE !== '1' && (!localApi || !devDatabase)) {
+    console.error(
+      `Refusing to seed demo data: API ${API} and database "${process.env.DB_DATABASE ?? ''}" ` +
+        'must be a local API and a dev/test/demo database (set SEED_DEMO_ANYWHERE=1 to override).',
+    );
+    process.exit(1);
+  }
 }
 
 // ---------- deterministic randomness (same data on every run) ----------

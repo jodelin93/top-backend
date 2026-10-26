@@ -529,6 +529,8 @@ describe('D018 on the adjustment and receipt paths', () => {
     const dataSource = {
       getRepository: () => ({
         exists: () => Promise.resolve(true),
+        findOne: () =>
+          Promise.resolve({ id: 'loc', warehouse: { warehouseType: 'store' } }),
         count: () => Promise.resolve(1),
       }),
       transaction: (work: (m: EntityManager) => Promise<unknown>) =>
@@ -541,8 +543,28 @@ describe('D018 on the adjustment and receipt paths', () => {
       dataSource as never,
       { record: jest.fn() } as unknown as AuditService,
     );
-    return { inventory, manager };
+    return { inventory, manager, dataSource };
   }
+
+  it('refuses to adjust stock in the transit location', async () => {
+    const { inventory, dataSource } = service();
+    const repo = dataSource.getRepository();
+    dataSource.getRepository = () => ({
+      ...repo,
+      findOne: () =>
+        Promise.resolve({ id: 'loc', warehouse: { warehouseType: 'transit' } }),
+    });
+    const apply = jest.spyOn(inventory, 'applyMovement');
+    await expect(
+      inventory.createAdjustment('t', 'u', {
+        locationId: 'transit-loc',
+        reason: AdjustmentReason.OTHER,
+        mode: 'delta',
+        items: [{ variantId: 'v', quantity: -1 }],
+      }),
+    ).rejects.toThrow('Stock in transit is changed through its transfer');
+    expect(apply).not.toHaveBeenCalled();
+  });
 
   it('an adjustment below zero is refused, never posted as oversell', async () => {
     const { inventory } = service();
@@ -744,6 +766,8 @@ describe('InventoryService with decimal (measured) quantities', () => {
     const dataSource = {
       getRepository: () => ({
         exists: () => Promise.resolve(true),
+        findOne: () =>
+          Promise.resolve({ id: 'loc', warehouse: { warehouseType: 'store' } }),
         count: () => Promise.resolve(1),
       }),
       transaction: (work: (m: EntityManager) => Promise<unknown>) =>

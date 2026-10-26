@@ -3,7 +3,11 @@ import { ReconciliationReportService } from './reconciliation.service';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const BRANCH = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-const RANGE = { from: '2026-09-01T00:00:00Z', to: '2026-09-30T23:59:59Z' };
+const RANGE = {
+  from: '2026-09-01T00:00:00Z',
+  to: '2026-09-30T23:59:59Z',
+  timezone: 'UTC',
+};
 
 function setup() {
   const query = jest.fn((sql: string) =>

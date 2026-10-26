@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import { isPgError, PG_UNIQUE_VIOLATION } from '../common/utils/pg-error';
 import { DataSource, EntityManager, In } from 'typeorm';
 import {
   Product,
@@ -113,6 +119,8 @@ const defaultVariantOf = (product: Product) =>
  */
 @Injectable()
 export class ImportsService {
+  private readonly logger = new Logger(ImportsService.name);
+
   constructor(
     private dataSource: DataSource,
     private barcodes: ProductBarcodesService,
@@ -281,8 +289,19 @@ export class ImportsService {
         result.created += created;
         result.updated += batch.length - created;
       } catch (error) {
-        // Earlier batches stay committed; re-running the file continues from here
-        const message = error instanceof Error ? error.message : String(error);
+        // Earlier batches stay committed; re-running the file continues from here.
+        // Our own refusals are shown as they are; a database error is logged,
+        // never sent to the client
+        const raw = error instanceof Error ? error.message : String(error);
+        const message =
+          error instanceof HttpException
+            ? raw
+            : isPgError(error, PG_UNIQUE_VIOLATION)
+              ? 'a SKU or barcode in this batch is already used by another product'
+              : 'the database refused this batch';
+        if (!(error instanceof HttpException)) {
+          this.logger.warn(`Import batch ${index + 1} failed: ${raw}`);
+        }
         result.error = `Batch ${index + 1} of ${batches.length} failed: ${message}`;
         const failedLines = new Set(
           batches.slice(index).flatMap((b) => b.map((r) => r.line)),

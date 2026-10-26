@@ -336,16 +336,28 @@ export const REPORTS: ReportDefinition[] = [
         FROM sale_items i JOIN sales s ON s.id = i."saleId"
         WHERE ${IN_PERIOD} AND ${SOLD} AND ${REVENUE_LINE} GROUP BY 1, 2
       ), returned AS (
-        SELECT ri."variantId", TRIM(r."currencyCode") AS currency, SUM(ri.quantity) AS returned
+        -- Gift cards are not revenue: their returns are left out as their sales are
+        SELECT ri."variantId", TRIM(r."currencyCode") AS currency, MAX(ri.sku) AS sku,
+               MAX(ri."productName") AS product, MAX(ri."variantName") AS variant,
+               SUM(ri.quantity) AS returned
         FROM sale_return_items ri JOIN sale_returns r ON r.id = ri."returnId"
-        WHERE ${RETURNS_IN_PERIOD} GROUP BY 1, 2
+        JOIN sale_items i ON i.id = ri."saleItemId"
+        WHERE ${RETURNS_IN_PERIOD} AND ${REVENUE_LINE} GROUP BY 1, 2
       )
-      SELECT sold.sku, sold.product, sold.variant, sold.currency, sold.quantity,
-             COALESCE(returned.returned, 0) AS returned, sold.revenue, sold."revenueExTax", sold.cost,
-             sold."revenueExTax" - sold.cost AS profit,
+      -- Items only returned in the period (sold earlier) are listed too
+      SELECT COALESCE(sold.sku, returned.sku) AS sku,
+             COALESCE(sold.product, returned.product) AS product,
+             COALESCE(sold.variant, returned.variant) AS variant,
+             COALESCE(sold.currency, returned.currency) AS currency,
+             COALESCE(sold.quantity, 0) AS quantity,
+             COALESCE(returned.returned, 0) AS returned,
+             COALESCE(sold.revenue, 0) AS revenue,
+             COALESCE(sold."revenueExTax", 0) AS "revenueExTax",
+             COALESCE(sold.cost, 0) AS cost,
+             COALESCE(sold."revenueExTax", 0) - COALESCE(sold.cost, 0) AS profit,
              CASE WHEN sold."revenueExTax" > 0 THEN (sold."revenueExTax" - sold.cost) / sold."revenueExTax" END AS margin
-      FROM sold LEFT JOIN returned ON returned."variantId" = sold."variantId" AND returned.currency = sold.currency
-      ORDER BY sold.currency, sold.revenue DESC`,
+      FROM sold FULL JOIN returned ON returned."variantId" = sold."variantId" AND returned.currency = sold.currency
+      ORDER BY 4, 7 DESC`,
   },
   {
     key: 'sales-by-category',
@@ -537,7 +549,12 @@ export const REPORTS: ReportDefinition[] = [
     columns: [
       { key: 'date', label: 'Date', type: 'datetime' },
       { key: 'orderNumber', label: 'Order', type: 'text' },
-      { key: 'customer', label: 'Customer', type: 'text' },
+      {
+        key: 'customer',
+        label: 'Customer',
+        type: 'text',
+        requires: 'customers.view',
+      },
       { key: 'branch', label: 'Branch', type: 'text' },
       { key: 'type', label: 'Type', type: 'text', translate: true },
       { key: 'method', label: 'Payment method', type: 'text' },

@@ -72,7 +72,9 @@ export interface UserInfo {
 
 export interface LoginResponse {
   accessToken: string;
-  user: UserInfo;
+  // Left out while the second factor is pending: nothing about the account
+  // is shown before the code
+  user?: UserInfo;
   requiresMfa: boolean;
   // Signed in with a restricted token: set up two-factor at /account/security first
   mfaSetupRequired: boolean;
@@ -192,11 +194,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // One signed-in device per user: checked before the second factor too
-    await this.claimSingleSession(user);
-
     // If MFA is enabled, return a temporary token (no session until the code is
     // verified). It only opens /auth/mfa/verify and carries no profile data.
+    // One signed-in device per user is checked once the code is verified
+    // (startSession): the password alone can't sign anyone out or see their device.
     if (user.mfaEnabled) {
       const tempToken = this.jwtService.sign(
         {
@@ -210,7 +211,6 @@ export class AuthService {
 
       return {
         accessToken: tempToken,
-        user: await this.getUserInfo(user),
         requiresMfa: true,
         mfaSetupRequired: false,
       };
@@ -448,11 +448,22 @@ export class AuthService {
     }
   }
 
-  async enableMfa(userId: string): Promise<{ secret: string; qrCode: string }> {
+  async enableMfa(
+    userId: string,
+    currentPassword: string,
+  ): Promise<{ secret: string; qrCode: string }> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
 
     if (!user) {
       throw new UnauthorizedException('User not found');
+    }
+    // The password again: a stolen session alone can't enrol its own
+    // authenticator and lock the real user out
+    assertNotLocked(user);
+    if (!(await passwordMatches(user, currentPassword))) {
+      await recordFailedAttempt(this.userRepository, user.id);
+      await this.auditAuthFailure(user, 'auth.mfa_enable_failed', 'password');
+      throw new UnauthorizedException('Your current password is incorrect');
     }
     // Replacing the secret of an active second factor would let a stolen
     // session take it over: it must be turned off (with a code) first

@@ -348,6 +348,7 @@ export class NotificationsService {
       input.tenantId,
       input.recipientUserId ?? null,
       permission,
+      input,
     );
     if (!recipients.length) return;
     const [store] = await this.dataSource.query<{ name: string }[]>(
@@ -373,11 +374,15 @@ export class NotificationsService {
     }
   }
 
-  /** Active members who should get the e-mail, with their preferences */
+  /**
+   * Active members who should get the e-mail, with their preferences: the
+   * same people who see it in the app (its branch, or its stock location)
+   */
   async emailRecipients(
     tenantId: string,
     userId: string | null,
     permission: string | null,
+    about: Pick<NotifyInput, 'branchId' | 'locationId' | 'entityId'> = {},
   ) {
     const members = await this.dataSource.query<
       {
@@ -401,8 +406,18 @@ export class NotificationsService {
          JOIN notification_preferences p ON p."tenantId" = m."tenantId" AND p."userId" = m."userId" AND p.email = true
          LEFT JOIN tenant_roles r ON r."tenantId" = m."tenantId" AND r.key = m.role
         WHERE m."tenantId" = $1 AND m.status = 'active' AND u.email IS NOT NULL
-          AND ($2::uuid IS NULL OR m."userId" = $2)`,
-      [tenantId, userId],
+          AND ($2::uuid IS NULL OR m."userId" = $2)
+          AND ($2::uuid IS NOT NULL OR m.role = 'owner' OR m."branchIds" IS NULL
+               OR $3::uuid = ANY(m."branchIds")
+               OR ($3::uuid IS NULL AND $4::uuid IN ${branchLocationIdsSql('m."branchIds"', '$1')})
+               OR ($3::uuid IS NULL AND $4::uuid IS NULL AND NOT $5::boolean))`,
+      [
+        tenantId,
+        userId,
+        about.branchId ?? null,
+        about.locationId ?? null,
+        !!about.entityId,
+      ],
     );
     return members
       .filter((m) => {

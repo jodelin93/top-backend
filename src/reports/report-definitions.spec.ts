@@ -13,7 +13,11 @@ const TENANT = '11111111-1111-1111-1111-111111111111';
 const BRANCH_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const BRANCH_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 const VARIANT = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
-const RANGE = { from: '2026-09-01T00:00:00Z', to: '2026-09-30T23:59:59Z' };
+const RANGE = {
+  from: '2026-09-01T00:00:00Z',
+  to: '2026-09-30T23:59:59Z',
+  timezone: 'UTC',
+};
 const EVERYTHING = [
   'reports.view',
   'reports.export',
@@ -21,6 +25,8 @@ const EVERYTHING = [
   'purchasing.manage',
   'purchasing.payables',
   'audit.view',
+  'sales.view.all',
+  'customers.view',
 ];
 // Reports that can't be split by branch
 const STORE_WIDE = ['supplier-aging', 'audit-activity'];
@@ -337,9 +343,18 @@ describe('new reports', () => {
     expect(() =>
       runner.prepare(TENANT, 'audit-activity', RANGE, ['reports.view']),
     ).toThrow(ForbiddenException);
-    const catalog = runner.catalog(['reports.view']).map((r) => r.key);
+    const catalog = runner
+      .catalog(['reports.view', 'sales.view.all'])
+      .map((r) => r.key);
     expect(catalog).not.toContain('audit-activity');
     expect(catalog).toContain('sales-by-hour');
+    // Limited to their own sales: no report over everyone's sales
+    const own = runner.catalog(['reports.view']).map((r) => r.key);
+    expect(own).not.toContain('sales-by-hour');
+    expect(own).toContain('inventory-valuation');
+    expect(() =>
+      runner.prepare(TENANT, 'sales-by-day', RANGE, ['reports.view']),
+    ).toThrow('it needs the permission to view all sales');
     for (const key of ['stock-adjustments', 'transfers', 'stock-card']) {
       const columns = visibleColumns(findReport(key)!.columns, [
         'reports.view',

@@ -96,6 +96,21 @@ function requireFile(file: Express.Multer.File | undefined): Buffer {
   return file.buffer;
 }
 
+/** Current and new costs are left out for roles that can't see costs */
+export function withoutHiddenCosts<T extends ImportPreview | ImportResult>(
+  result: T,
+  permissions: readonly string[] | undefined,
+): T {
+  if (!hiddenFieldsFor(permissions).has('cost')) return result;
+  return {
+    ...result,
+    rows: result.rows.map((row) => ({
+      ...row,
+      priceChanges: row.priceChanges.filter((c) => c.field !== 'cost'),
+    })),
+  };
+}
+
 /** CSV product import: template, dry-run preview, apply */
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @RequirePermissions('catalog.import')
@@ -158,12 +173,16 @@ export class ImportsController {
   @ApiBody(csvBody)
   @UseInterceptors(csvUpload())
   @UserThrottle()
-  preview(
+  async preview(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: ImportPolicyDto,
   ): Promise<ImportPreview> {
-    return this.imports.preview(tenantId, requireFile(file), toPolicy(dto));
+    return withoutHiddenCosts(
+      await this.imports.preview(tenantId, requireFile(file), toPolicy(dto)),
+      user.permissions,
+    );
   }
 
   /** POST /imports/products/apply (multipart file, skipInvalid, policy) */
@@ -173,15 +192,17 @@ export class ImportsController {
   @ApiBody(csvBody)
   @UseInterceptors(csvUpload())
   @UserThrottle()
-  apply(
+  async apply(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: ApplyImportDto,
   ): Promise<ImportResult> {
-    return this.imports.apply(tenantId, requireFile(file), {
+    const result = await this.imports.apply(tenantId, requireFile(file), {
       skipInvalid: dto.skipInvalid === 'true',
       policy: toPolicy(dto),
       fileName: file?.originalname?.slice(0, 255),
     });
+    return withoutHiddenCosts(result, user.permissions);
   }
 }

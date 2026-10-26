@@ -9,6 +9,7 @@ import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { deleteTenant } from './helpers/delete-tenant';
+import { NotificationsService } from '../src/notifications/notifications.service';
 
 /**
  * Branch-level access (spec §3/§9, AC15) against the real database in .env.
@@ -427,7 +428,9 @@ describe('Branch-level access (e2e, AC15)', () => {
 
   describe('store-wide settings', () => {
     it("a branch-limited manager can't change them (settings, payment methods, taxes)", async () => {
-      const settings = await asStaff('patch', '/settings', { receiptFooter: 'x' });
+      const settings = await asStaff('patch', '/settings', {
+        receiptFooter: 'x',
+      });
       expect(settings.status).toBe(403);
       const method = await asStaff('post', '/payment-methods', {
         code: `E2E${Date.now() % 100000}`,
@@ -473,6 +476,37 @@ describe('Branch-level access (e2e, AC15)', () => {
         `/sync/changes?registerId=${branchB.registerId}`,
       );
       expect(changes.status).toBe(404);
+    });
+  });
+
+  describe('notification e-mails', () => {
+    it("go to branch A's staff for branch A only, as in the app", async () => {
+      // Both want e-mail copies
+      for (const userId of [...createdUserIds]) {
+        await dataSource.query(
+          `INSERT INTO notification_preferences ("tenantId", "userId", email)
+           VALUES ($1, $2, true)
+           ON CONFLICT ("tenantId", "userId") DO UPDATE SET email = true`,
+          [tenantId, userId],
+        );
+      }
+      const notifications = app.get(NotificationsService);
+      const to = async (about: object) =>
+        (await notifications.emailRecipients(tenantId!, null, null, about)).map(
+          (r) => r.email,
+        );
+      expect(await to({ branchId: branchA.id })).toContain(STAFF_EMAIL);
+      expect(await to({ branchId: branchB.id })).not.toContain(STAFF_EMAIL);
+      expect(await to({ branchId: branchB.id })).toContain(OWNER_EMAIL);
+      expect(await to({ locationId: branchA.locationId })).toContain(
+        STAFF_EMAIL,
+      );
+      expect(await to({ locationId: branchB.locationId })).not.toContain(
+        STAFF_EMAIL,
+      );
+      // A store-wide summary reaches everyone; an alert on an unplaced record does not
+      expect(await to({})).toContain(STAFF_EMAIL);
+      expect(await to({ entityId: variantId })).not.toContain(STAFF_EMAIL);
     });
   });
 

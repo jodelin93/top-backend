@@ -16,7 +16,10 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthUser } from '../auth/strategies/jwt.strategy';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator';
 import { ReportsService } from './reports.service';
-import { ReportRunnerService } from './report-runner.service';
+import {
+  assertSeesAllSales,
+  ReportRunnerService,
+} from './report-runner.service';
 import { ReconciliationReportService } from './reconciliation.service';
 import { DailySummaryService } from './daily-summary.service';
 import {
@@ -52,6 +55,7 @@ export class ReportsController {
     @CurrentUser() user: AuthUser,
     @Query() query: ReportQueryDto,
   ) {
+    assertSeesAllSales(user.permissions);
     return this.reportsService.summary(
       tenantId,
       query,
@@ -73,6 +77,7 @@ export class ReportsController {
     @Query() query: DailySummaryQueryDto,
     @Res({ passthrough: true }) res: Response,
   ) {
+    assertSeesAllSales(user.permissions);
     const file = await this.dailySummary.pdf(
       tenantId,
       query,
@@ -106,6 +111,7 @@ export class ReportsController {
     @CurrentUser() user: AuthUser,
     @Query() query: ReportQueryDto,
   ) {
+    assertSeesAllSales(user.permissions);
     return this.reconciliation.run(
       tenantId,
       query,

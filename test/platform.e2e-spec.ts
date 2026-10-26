@@ -6,6 +6,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { DataSource } from 'typeorm';
+import { randomUUID } from 'crypto';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { deleteTenant } from './helpers/delete-tenant';
@@ -17,6 +18,8 @@ import { deleteTenant } from './helpers/delete-tenant';
  */
 
 const RUN = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// One device for every sign-in of the run (one signed-in device per user)
+const DEVICE = randomUUID();
 const OWNER_EMAIL = `platform-e2e-${RUN}@test.local`;
 const PASSWORD = 'TestPass123!';
 
@@ -36,7 +39,8 @@ describe('Platform (e2e)', () => {
     // API-client mode: tokens in the body, bearer auth (see auth/session-cookie.ts)
     let req = request(app.getHttpServer())
       [method](`/api/v1${path}`)
-      .set('X-Auth-Mode', 'token');
+      .set('X-Auth-Mode', 'token')
+      .set('X-Device-Id', DEVICE);
     if (bearer) req = req.set('Authorization', `Bearer ${bearer}`);
     return body ? req.send(body) : req;
   };
@@ -162,6 +166,12 @@ describe('Platform (e2e)', () => {
     expect((await api('get', '/sessions', undefined, t)).status).toBe(200);
     expect((await api('post', '/auth/logout', undefined, t)).status).toBe(200);
     expect((await api('get', '/sessions', undefined, t)).status).toBe(401);
+    // That sign-in replaced the suite's session (same device): sign in again
+    const again = await api('post', '/auth/login', {
+      email: OWNER_EMAIL,
+      password: PASSWORD,
+    });
+    token = again.body.accessToken as string;
   });
 
   it('registers a device and issues an offline lease', async () => {

@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { ProductBarcodesService } from '../products/product-barcodes.service';
 import { Category } from '../database/entities/category.entity';
@@ -11,6 +11,7 @@ import {
 } from '../database/entities/product.entity';
 import { ProductVariant } from '../database/entities/product-variant.entity';
 import { ImportsService } from './imports.service';
+import { withoutHiddenCosts } from './imports.controller';
 
 const TENANT = 'tenant-1';
 
@@ -167,6 +168,39 @@ describe('ImportsService', () => {
       }),
       manager,
     );
+  });
+
+  it("hides cost changes from roles that can't see costs", async () => {
+    const preview = await service.preview(
+      TENANT,
+      csv('sku,price,cost', 'MUG,12.50,4'),
+    );
+    expect(preview.rows[0].priceChanges.map((c) => c.field)).toEqual([
+      'price',
+      'cost',
+    ]);
+    const hidden = withoutHiddenCosts(preview, ['catalog.import']);
+    expect(hidden.rows[0].priceChanges.map((c) => c.field)).toEqual(['price']);
+    const shown = withoutHiddenCosts(preview, ['inventory.cost.view']);
+    expect(shown.rows[0].priceChanges).toHaveLength(2);
+  });
+
+  it('tells which batch failed without the raw database error', async () => {
+    dataSource.transaction.mockRejectedValueOnce(
+      new QueryFailedError(
+        'INSERT',
+        [],
+        new Error('relation "secret" does not exist'),
+      ),
+    );
+    const result = await service.apply(
+      TENANT,
+      csv('sku,name,price', 'NEW-1,New thing,5'),
+    );
+    expect(result.error).toBe(
+      'Batch 1 of 1 failed: the database refused this batch',
+    );
+    expect(JSON.stringify(result)).not.toContain('secret');
   });
 
   it('leaves existing products untouched with onExisting=skip', async () => {
