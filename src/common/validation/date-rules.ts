@@ -34,6 +34,7 @@ export const MESSAGES = {
   past: 'The date cannot be in the past',
   range: 'The start date is after the end date',
   tooOld: 'The date cannot be before 1900',
+  tooLong: 'Choose a period of at most 400 days',
 } as const;
 
 export function isDateOnly(value: unknown): value is string {
@@ -311,4 +312,28 @@ export function assertShiftLength(clockIn: Date, clockOut: Date | null): void {
   if (clockOut.getTime() - clockIn.getTime() > MAX_SHIFT_MS) {
     throw new BadRequestException('A shift cannot last more than 24 hours');
   }
+}
+
+/**
+ * The date is at most `days` after another field (a report's period): the
+ * longest range a report runs over, so one request can't scan years of data
+ */
+export function IsAtMostDaysAfterField(
+  field: string,
+  days: number,
+  options?: ValidationOptions,
+) {
+  return decorator(
+    'isAtMostDaysAfterField',
+    (value, args) => {
+      const other = (args.object as Record<string, unknown>)[field];
+      const end = typeof value === 'string' ? Date.parse(value) : NaN;
+      const start = typeof other === 'string' ? Date.parse(other) : NaN;
+      if (Number.isNaN(end) || Number.isNaN(start)) return true;
+      return end - start <= (days + 1) * 86_400_000;
+    },
+    MESSAGES.tooLong,
+    options,
+    [field, days],
+  );
 }

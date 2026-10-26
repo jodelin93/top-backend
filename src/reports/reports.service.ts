@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
+import { withReportTimeout } from './report-timeout';
 import { SettingsService } from '../settings/settings.service';
 import { ReportQueryDto } from './reports.dto';
 import {
@@ -111,7 +112,20 @@ export class ReportsService {
    * (branch-limited access); payables are store-wide, so they are only shown
    * without a branch restriction.
    */
-  async summary(
+  /** Dashboard figures, under the reports' statement timeout */
+  summary(
+    tenantId: string,
+    query: ReportQueryDto,
+    permissions: readonly string[] = [],
+    scope?: ReportScope,
+  ) {
+    return withReportTimeout(this.dataSource, (manager) =>
+      this.summaryIn(manager, tenantId, query, permissions, scope),
+    );
+  }
+
+  private async summaryIn(
+    manager: EntityManager,
     tenantId: string,
     query: ReportQueryDto,
     permissions: readonly string[] = [],
@@ -138,7 +152,7 @@ export class ReportsService {
     ];
     const q = <T>(sql: string) => {
       const bound = bindParams(sql, all);
-      return this.dataSource.query<T>(bound.sql, bound.values);
+      return manager.query<T>(bound.sql, bound.values);
     };
     const completed = `s."tenantId" = $1 AND s."saleDate" >= $2 AND s."saleDate" <= $3 AND s.status IN (${SOLD_STATUSES}) AND ${saleInBranch('$6')}`;
     const returned = `r."tenantId" = $1 AND r.created_at >= $2 AND r.created_at <= $3 AND ${ELIGIBLE_RETURN} AND ${returnInBranch('$6')}`;
@@ -170,8 +184,17 @@ export class ReportsService {
 
     // Returns processed in the period (by return date, like a till's day report)
     const returnRows = await q<ReturnsRow[]>(
-      `WITH rets AS (
-         SELECT r.id, r."currencyCode", r.total, r."taxAmount" FROM sale_returns r WHERE ${returned}
+      `WITH sv AS (
+         -- Gift cards given back: stored value, never in net sales, so never off them
+         SELECT ri."returnId", SUM(ri.total) AS total, SUM(ri."taxAmount") AS tax
+         FROM sale_return_items ri JOIN sale_items i ON i.id = ri."saleItemId"
+         WHERE ri."returnId" IN (SELECT r.id FROM sale_returns r WHERE ${returned}) AND ${STORED_VALUE_LINE}
+         GROUP BY 1
+       ), rets AS (
+         SELECT r.id, r."currencyCode",
+                r.total - COALESCE(sv.total, 0) AS total,
+                r."taxAmount" - COALESCE(sv.tax, 0) AS "taxAmount"
+         FROM sale_returns r LEFT JOIN sv ON sv."returnId" = r.id WHERE ${returned}
        ), restocked AS (
          -- Restocked items come back into inventory: no longer a cost of sale
          SELECT ri."returnId", SUM(COALESCE(si.cost, 0) * ri.quantity) AS cost
@@ -186,6 +209,7 @@ export class ReportsService {
               COALESCE(SUM(r.total), 0) AS "returnsInclTax",
               COALESCE(SUM(restocked.cost), 0) AS "restockedCost"
        FROM rets r LEFT JOIN restocked ON restocked."returnId" = r.id
+       WHERE r.total <> 0 OR r."taxAmount" <> 0
        GROUP BY 1`,
     );
 

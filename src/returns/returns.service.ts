@@ -447,6 +447,7 @@ export class ReturnsService {
                 tenantId,
                 line.locationId,
                 'damaged',
+                { createWhenMissing: true },
               );
           }
         }
@@ -1226,6 +1227,69 @@ export class ReturnsService {
   }
 
   /**
+   * The ways an order's deposits were paid (cash, card...), as refund sources of
+   * its pickup sale: what each way paid, less what was already given back
+   * through it, never more in all than the sale's deposit tender has left.
+   */
+  private async depositWays<
+    T extends RefundablePayment & {
+      payment: Payment;
+      special: SpecialTenderCode | null;
+    },
+  >(
+    manager: EntityManager,
+    tenantId: string,
+    saleId: string,
+    refundable: T[],
+  ): Promise<T[]> {
+    const tender = refundable.find((p) => p.special === ORDER_DEPOSIT_CODE);
+    if (!tender) return [];
+    let left = round2(tender.amount - tender.refunded);
+    if (left <= 0) return [];
+    const paid = await manager.query<
+      { methodId: string; type: PaymentMethodType; amount: string }[]
+    >(
+      `SELECT op."paymentMethodId" AS "methodId", pm."methodType"::text AS type,
+              SUM(CASE WHEN op.type = 'deposit' THEN op.amount ELSE 0 - op.amount END) AS amount
+         FROM customer_order_payments op
+         JOIN customer_orders o ON o.id = op."orderId"
+         JOIN payment_methods pm ON pm.id = op."paymentMethodId"
+        WHERE o."tenantId" = $1 AND o."saleId" = $2
+        GROUP BY 1, 2
+        ORDER BY pm."methodType"::text <> 'cash', op."paymentMethodId"`,
+      [tenantId, saleId],
+    );
+    const given = await manager.query<{ methodId: string; amount: string }[]>(
+      `SELECT refund."paymentMethodId" AS "methodId", SUM(refund.amount) AS amount
+         FROM sale_return_refunds refund
+        WHERE refund."tenantId" = $1 AND refund."originalPaymentId" = $2
+          AND refund.status <> 'failed'
+        GROUP BY 1`,
+      [tenantId, tender.paymentId],
+    );
+    const givenBy = new Map(given.map((g) => [g.methodId, Number(g.amount)]));
+    const ways: T[] = [];
+    for (const way of paid) {
+      const amount = round2(Number(way.amount));
+      const available = Math.min(
+        round2(amount - (givenBy.get(way.methodId) ?? 0)),
+        left,
+      );
+      if (amount <= 0 || available <= 0) continue;
+      left = round2(left - available);
+      ways.push({
+        ...tender,
+        paymentMethodId: way.methodId,
+        isCash: way.type === PaymentMethodType.CASH,
+        amount,
+        refunded: round2(amount - available),
+        special: null,
+      });
+    }
+    return ways;
+  }
+
+  /**
    * Decide how the refund is paid. Default: back to the original payments.
    * Explicit refunds may use any active method; a method used on the sale is linked
    * to that payment (card refunds then go through its provider).
@@ -1321,6 +1385,16 @@ export class ReturnsService {
         special: specialTenderOf(payment.paymentMethod),
       };
     });
+
+    // A pickup sale's deposits were paid before, in their own ways: the deposit
+    // share of a refund goes back through those ways (as the deposits came in),
+    // with no other-tender approval
+    const depositWays = await this.depositWays(
+      manager,
+      tenantId,
+      sale.id,
+      refundable,
+    );
 
     // Never refund more than was paid on the sale in total (failed refunds excluded,
     // see activeRefunds)
@@ -1419,12 +1493,16 @@ export class ReturnsService {
       const onAccount = refundable.filter((p) => p.special === ON_ACCOUNT_CODE);
       // An order's deposits are no tender to give money back to: the rest
       // of the sale's payments cover the refund, or the cashier chooses how
-      const ordinary = refundable.filter(
-        (p) =>
-          p.special !== ON_ACCOUNT_CODE &&
-          p.special !== EXCHANGE_CREDIT_CODE &&
-          p.special !== ORDER_DEPOSIT_CODE,
-      );
+      const ordinary = [
+        ...refundable.filter(
+          (p) =>
+            p.special !== ON_ACCOUNT_CODE &&
+            p.special !== EXCHANGE_CREDIT_CODE &&
+            p.special !== ORDER_DEPOSIT_CODE,
+        ),
+        // …then the ways the deposits were paid
+        ...depositWays,
+      ];
       let remaining = cents(toPlan);
       if (onAccount.length) {
         const paid = onAccount.reduce((a, p) => a + cents(p.amount), 0);
@@ -1466,7 +1544,11 @@ export class ReturnsService {
               plan(
                 allocation.paymentMethodId,
                 allocation.amount,
-                ordinary.find((p) => p.paymentId === allocation.paymentId)!,
+                ordinary.find(
+                  (p) =>
+                    p.paymentId === allocation.paymentId &&
+                    p.paymentMethodId === allocation.paymentMethodId,
+                )!,
                 null,
               ),
             );
@@ -1496,7 +1578,7 @@ export class ReturnsService {
     });
     // What each method used on the sale still has left to refund
     const room = new Map<string, number>();
-    for (const p of refundable) {
+    for (const p of [...refundable, ...depositWays]) {
       room.set(
         p.paymentMethodId,
         round2((room.get(p.paymentMethodId) ?? 0) + p.amount - p.refunded),
@@ -1539,7 +1621,7 @@ export class ReturnsService {
       }
       // Link to an original payment of the same method that still has room
       const source =
-        refundable.find(
+        [...refundable, ...depositWays].find(
           (p) =>
             p.paymentMethodId === method.id &&
             round2(p.amount - p.refunded) >= refund.amount,

@@ -54,6 +54,8 @@ export class CreateAdjustmentDto {
   @IsEnum(AdjustmentReason) reason: AdjustmentReason;
   @IsIn(['set', 'delta']) mode: 'set' | 'delta';
   @IsString() @IsOptional() @MaxLength(500) notes?: string;
+  // One per attempt: a retry (double click, lost answer) changes stock once
+  @IsString() @IsOptional() @MaxLength(100) idempotencyKey?: string;
 
   @IsArray()
   @ArrayMinSize(1)
@@ -76,6 +78,8 @@ export class ReceiveStockDto {
   // Supplier invoice / delivery note number
   @IsString() @IsOptional() @MaxLength(100) reference?: string;
   @IsString() @IsOptional() @MaxLength(500) notes?: string;
+  // One per attempt: a retry (double click, lost answer) receives once
+  @IsString() @IsOptional() @MaxLength(100) idempotencyKey?: string;
 
   @IsArray()
   @ArrayMinSize(1)

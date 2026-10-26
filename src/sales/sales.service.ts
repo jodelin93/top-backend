@@ -70,13 +70,17 @@ import { ApprovalsService } from '../approvals/approvals.service';
 import { ShiftsService } from '../shifts/shifts.service';
 import { Shift, ShiftStatus } from '../database/entities/shift.entity';
 import { PaymentsService } from '../payments/payments.service';
-import { summarizePayments } from '../payments/payment-state';
+import {
+  CANCELLING_TIMEOUT_MS,
+  summarizePayments,
+} from '../payments/payment-state';
 import {
   calculateSale,
   CalcLineInput,
   CalcOptions,
   CalcResult,
   round2,
+  samePrice,
 } from './sale-calculator';
 import { addQty, subQty } from '../common/utils/quantity';
 import {
@@ -270,7 +274,6 @@ export interface SaleChangeTender {
 
 const SALE_REFERENCE = 'sale';
 // How long a "being cancelled" flag blocks completion of a payment_pending sale
-const CANCELLING_TIMEOUT_MS = 2 * 60_000;
 const GIFT_CARD_UNUSABLE = "This gift card can't be used";
 // Tenders that earn no loyalty points
 const NO_LOYALTY_TENDERS = [
@@ -468,6 +471,12 @@ export class SalesService implements OnModuleInit {
     let issuedGiftCards: IssuedGiftCard[] = [];
     try {
       saleId = await this.dataSource.transaction(async (manager) => {
+        // The cash session stays open until this sale commits: closing it waits
+        // for the sale (its Z report then counts it), and a session closed or
+        // being closed meanwhile takes no new sale
+        if (shiftId && !offline) {
+          await this.lockOpenShift(manager, tenantId, shiftId);
+        }
         const cart = dto.heldSaleId
           ? await this.lockOpenCart(manager, tenantId, dto.heldSaleId)
           : null;
@@ -1550,6 +1559,16 @@ export class SalesService implements OnModuleInit {
         where: { id, tenantId },
         lock: { mode: 'pessimistic_write' },
       });
+      // Checked again under the session's lock: a session closed since (or
+      // being closed) gets a return, never a void
+      if (sale.shiftId) {
+        await this.lockOpenShift(
+          manager,
+          tenantId,
+          sale.shiftId,
+          "This sale's shift is closed: use a return instead of a void",
+        );
+      }
       // Anything already given back (return, exchange, goodwill refund) would be
       // refunded twice by a void
       const [returned] = await manager.query<{ id: string }[]>(
@@ -1643,6 +1662,25 @@ export class SalesService implements OnModuleInit {
    * can be marked refunded here: card payments captured through a provider must
    * be refunded at the provider, with a return.
    */
+  /**
+   * Hold the cash session open (FOR SHARE: closing it takes FOR UPDATE, so it
+   * waits for this transaction); refused when it is closed or being closed.
+   */
+  private async lockOpenShift(
+    manager: EntityManager,
+    tenantId: string,
+    shiftId: string,
+    message = 'This cash session was closed meanwhile: open a new one to sell',
+  ) {
+    const [shift] = await manager.query<{ status: ShiftStatus }[]>(
+      `SELECT status::text AS status FROM shifts WHERE id = $1 AND "tenantId" = $2 FOR SHARE`,
+      [shiftId, tenantId],
+    );
+    if (!shift || shift.status !== ShiftStatus.OPEN) {
+      throw new ConflictException(message);
+    }
+  }
+
   private async assertVoidable(tenantId: string, sale: Sale) {
     if (sale.shiftId) {
       const shift = await this.dataSource
@@ -1778,10 +1816,18 @@ export class SalesService implements OnModuleInit {
       customer?.groupId,
     );
     const priceListId = dto.priceListId ?? group?.priceListId ?? undefined;
+    // How much of each variant the cart holds: quantity breaks of the lists
+    const quantities = new Map<string, number>();
+    for (const item of dto.items) {
+      quantities.set(
+        item.variantId,
+        (quantities.get(item.variantId) ?? 0) + Number(item.quantity),
+      );
+    }
     const prices = await this.pricingService.resolvePrices(
       tenantId,
       variantList,
-      { branchId: branch.id, priceListId, at: pricedAt },
+      { branchId: branch.id, priceListId, at: pricedAt, quantities },
     );
     // A chosen list that is not for everyone (wholesale, staff, ...) and not the
     // customer's group list: its prices are price changes (pos.price.override)
@@ -1796,6 +1842,7 @@ export class SalesService implements OnModuleInit {
       ? await this.pricingService.resolvePrices(tenantId, variantList, {
           branchId: branch.id,
           at: pricedAt,
+          quantities,
         })
       : prices;
 
@@ -2151,10 +2198,7 @@ export class SalesService implements OnModuleInit {
             saleNumber: sale.saleNumber,
             offline,
             lines: calc.lines
-              .filter(
-                (l) =>
-                  round2(l.unitPrice) !== round2(catalogPrices.get(l.key)!),
-              )
+              .filter((l) => !samePrice(l.unitPrice, catalogPrices.get(l.key)!))
               .map((l) => ({
                 line: Number(l.key) + 1,
                 variantId: prepared.variants.get(l.key)!.id,
@@ -2294,8 +2338,9 @@ export class SalesService implements OnModuleInit {
         variantName: variant.name?.en,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
-        originalUnitPrice:
-          round2(line.unitPrice) !== round2(catalogPrice) ? catalogPrice : null,
+        originalUnitPrice: !samePrice(line.unitPrice, catalogPrice)
+          ? catalogPrice
+          : null,
         subtotal: line.subtotal,
         discountAmount: line.discountAmount,
         taxAmount: line.taxAmount,

@@ -34,7 +34,20 @@ function setup(rows: Record<string, unknown>[] = []) {
     ),
   );
   const runner = new ReportRunnerService(
-    { query } as unknown as DataSource,
+    {
+      query,
+      // Report queries run in a transaction with a statement timeout
+      transaction: (work: (m: unknown) => Promise<unknown>) =>
+        work({
+          query: (sql: string, values?: unknown[]) =>
+            sql.startsWith('SET LOCAL')
+              ? Promise.resolve([])
+              : (query as (...args: unknown[]) => Promise<unknown>)(
+                  sql,
+                  values,
+                ),
+        }),
+    } as unknown as DataSource,
     { record: jest.fn() } as unknown as AuditService,
   );
   return { runner, query };

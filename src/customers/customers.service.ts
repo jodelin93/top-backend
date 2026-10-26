@@ -127,6 +127,34 @@ export function customerForViewer<T extends Partial<Customer>>(
 export class CustomersService extends TenantCrudService<Customer> {
   protected readonly entityName = 'Customer';
 
+  /**
+   * Delete a customer only while nothing refers to them. One with history
+   * (sales, estimates, orders, points, credit, returns, stored value) keeps it:
+   * deactivated, or their personal details erased (anonymize), never deleted —
+   * a hard delete would unlink or orphan that history.
+   */
+  async remove(tenantId: string, id: string): Promise<void> {
+    await this.findOne(tenantId, id);
+    const [history] = await this.dataSource.query<{ used: boolean }[]>(
+      `SELECT EXISTS (SELECT 1 FROM sales WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM estimates WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM customer_orders WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM loyalty_transactions WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM sale_returns WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM customer_credit_entries WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM customer_credit_allocations WHERE "tenantId" = $1 AND "customerId" = $2)
+           OR EXISTS (SELECT 1 FROM stored_value_accounts WHERE "tenantId" = $1 AND "customerId" = $2)
+           AS used`,
+      [tenantId, id],
+    );
+    if (history?.used) {
+      throw new ConflictException(
+        'This customer has a history (sales, points, credit...): deactivate them, or erase their personal details, instead of deleting',
+      );
+    }
+    return super.remove(tenantId, id);
+  }
+
   constructor(
     @InjectRepository(Customer) repository: Repository<Customer>,
     private dataSource: DataSource,

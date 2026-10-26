@@ -27,7 +27,20 @@ describe('ReportsService.summary: gift cards and exchange credit', () => {
       ),
     };
     const service = new ReportsService(
-      { query } as unknown as DataSource,
+      {
+        query,
+        // Report queries run in a transaction with a statement timeout
+        transaction: (work: (m: unknown) => Promise<unknown>) =>
+          work({
+            query: (sql: string, values?: unknown[]) =>
+              sql.startsWith('SET LOCAL')
+                ? Promise.resolve([])
+                : (query as (...args: unknown[]) => Promise<unknown>)(
+                    sql,
+                    values,
+                  ),
+          }),
+      } as unknown as DataSource,
       settings as unknown as SettingsService,
     );
     return { service, sqls };
@@ -55,6 +68,8 @@ describe('ReportsService.summary: gift cards and exchange credit', () => {
       to: '2026-09-30T23:59:59Z',
     });
     const tenderSql = sqls.find((sql) => sql.includes('"methodType"'));
-    expect(tenderSql).toContain("pm.code NOT IN ('EXCHANGE_CREDIT', 'ORDER_DEPOSIT')");
+    expect(tenderSql).toContain(
+      "pm.code NOT IN ('EXCHANGE_CREDIT', 'ORDER_DEPOSIT')",
+    );
   });
 });

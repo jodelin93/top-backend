@@ -683,12 +683,31 @@ describe('SalesService', () => {
 
     it('stamps the open shift on the sale', async () => {
       shiftsService.getOpenShift.mockResolvedValue({ id: 'shift-1' });
+      // The session, held open (FOR SHARE) until the sale commits
+      manager.query.mockResolvedValueOnce([{ status: 'open' }]);
       await service.create(
         TENANT,
         USER,
         saleDto([{ paymentMethodId: 'cash', amount: 20 }]),
       );
       expect(savedSale()).toMatchObject({ shiftId: 'shift-1' });
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('FOR SHARE'),
+        ['shift-1', TENANT],
+      );
+    });
+
+    it('takes no sale in a session closed or being closed meanwhile', async () => {
+      shiftsService.getOpenShift.mockResolvedValue({ id: 'shift-1' });
+      manager.query.mockResolvedValueOnce([{ status: 'closing' }]);
+      await expect(
+        service.create(
+          TENANT,
+          USER,
+          saleDto([{ paymentMethodId: 'cash', amount: 20 }]),
+        ),
+      ).rejects.toThrow('closed meanwhile');
+      expect(manager.save).not.toHaveBeenCalled();
     });
   });
 
@@ -2914,6 +2933,7 @@ describe('SalesService', () => {
 
     it('voids a sale of the open shift', async () => {
       completed({ shiftId: 'shift-1' });
+      manager.query.mockResolvedValueOnce([{ status: 'open' }]);
       await service.void(TENANT, USER, 'sale-1', 'Mistake');
       expect(manager.update).toHaveBeenCalledWith(
         SaleEntity,

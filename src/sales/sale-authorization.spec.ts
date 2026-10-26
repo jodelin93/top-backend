@@ -21,6 +21,20 @@ describe('requiredOverrides', () => {
     expect(requiredOverrides([line(10)], 0, 20).permissions).toEqual([]);
   });
 
+  it('needs pos.price.override for any price change, even below a cent (per-gram prices)', () => {
+    // 0.0045 per gram rung up at 0: 450.00 off on 100 kg
+    expect(requiredOverrides([line(0, 0.0045)], 0, 20).permissions).toEqual([
+      'pos.price.override',
+    ]);
+    expect(
+      requiredOverrides([line(0.0041, 0.0045)], 0, 20).permissions,
+    ).toEqual(['pos.price.override']);
+    // The same price written another way is no change
+    expect(requiredOverrides([line(0.45, 0.45)], 0, 20).permissions).toEqual(
+      [],
+    );
+  });
+
   it('needs pos.discount for a line discount within the limit', () => {
     const check = requiredOverrides([line(10, 10, 20)], 0, 20);
     expect(check.permissions).toEqual(['pos.discount']);
@@ -48,10 +62,13 @@ describe('requiredOverrides', () => {
     expect(check.reasons[0]).toBe('Line 1: price 10.00 → 8.00');
   });
 
-  it('ignores sub-cent differences', () => {
-    expect(requiredOverrides([line(10.001, 10)], 0, 20).permissions).toEqual(
+  it('ignores floating-point noise beyond the 4 stored decimals', () => {
+    expect(requiredOverrides([line(10.00001, 10)], 0, 20).permissions).toEqual(
       [],
     );
+    expect(
+      requiredOverrides([line(0.1 + 0.2, 0.3)], 0, 20).permissions,
+    ).toEqual([]);
   });
 
   it('can need both a price and a discount override', () => {

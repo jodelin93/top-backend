@@ -111,6 +111,14 @@ const QTY_SCALE = 10_000;
 const scaled = (value: number, scale: number): number =>
   Math.round(Number((value * scale).toPrecision(15)));
 
+/**
+ * Is a unit price the catalog price? Compared at 4 decimals, as prices are
+ * stored (an item sold per gram costs 0.0045): never rounded to cents, or a
+ * price taken down by less than half a cent per unit would pass unseen.
+ */
+export const samePrice = (a: number, b: number): boolean =>
+  scaled(a, RATE_SCALE) === scaled(b, RATE_SCALE);
+
 const toCents = (value: number): number => scaled(value, 100);
 const fromCents = (cents: number): number => cents / 100;
 

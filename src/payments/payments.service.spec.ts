@@ -71,6 +71,8 @@ describe('PaymentsService', () => {
       entity === PaymentWebhookEvent ? eventsRepo : paymentsRepo,
     ),
     createQueryBuilder: jest.fn(() => insertChain),
+    // Redelivery: the event row to do again ([rows, count]); none by default
+    query: jest.fn((): Promise<unknown> => Promise.resolve([[], 0])),
     transaction: jest.fn((work: (m: typeof manager) => Promise<unknown>) =>
       work(manager),
     ),
@@ -216,6 +218,19 @@ describe('PaymentsService', () => {
     expect(result).toEqual({ received: true, duplicate: true });
     expect(manager.update).not.toHaveBeenCalled();
     expect(settled).not.toHaveBeenCalled();
+  });
+
+  it('applies a redelivered event whose first try failed', async () => {
+    insertedIds = [];
+    dataSource.query.mockResolvedValueOnce([[{ id: 'evt-row-1' }], 1]);
+    const { rawBody, headers } = mock.buildWebhook(
+      'mock_1_2000_abcdef01',
+      'captured',
+      'evt_1',
+    );
+    const result = await service.handleWebhook('mock', rawBody, headers);
+    expect(result).toEqual({ received: true, matched: true });
+    expect(payments[0].status).toBe(PaymentStatus.CAPTURED);
   });
 
   it('does not move a captured payment back on a late "authorized" event', async () => {

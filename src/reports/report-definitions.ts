@@ -123,6 +123,20 @@ export const EXCHANGE_CREDIT_METHOD = `'EXCHANGE_CREDIT'`;
 export const ORDER_DEPOSIT_METHOD = `'ORDER_DEPOSIT'`;
 // Order deposits / refunds `op` of order `o` in the period at the selected branches
 const ORDER_PAYMENTS_IN_PERIOD = `op."tenantId" = $1 AND op.created_at >= $2 AND op.created_at <= $3 AND ${saleInBranch(B, 'o')}`;
+// Tenders that move no money: stored value (gift cards, store credit, points),
+// sales on account, exchange credit and the deposit tender of a pickup
+const MONEYLESS_TENDERS = [
+  EXCHANGE_CREDIT_METHOD,
+  ORDER_DEPOSIT_METHOD,
+  `'GIFT_CARD'`,
+  `'STORE_CREDIT'`,
+  `'ON_ACCOUNT'`,
+  `'LOYALTY'`,
+].join(', ');
+// The store currency (tenant settings)
+const STORE_CURRENCY = `(SELECT COALESCE(TRIM(t.settings->>'currencyCode'), 'USD') FROM tenants t WHERE t.id = $1)`;
+// The all-branches view (no branch filter)
+const ALL_BRANCHES = `${B}::uuid[] IS NULL`;
 // Neither exchange credit nor the deposit tender of a pickup: no money moved
 const NOT_MONEYLESS_TENDER = (paymentMethodId: string) =>
   `NOT EXISTS (SELECT 1 FROM payment_methods xm WHERE xm.id = ${paymentMethodId} AND xm.code IN (${EXCHANGE_CREDIT_METHOD}, ${ORDER_DEPOSIT_METHOD}))`;
@@ -441,7 +455,7 @@ export const REPORTS: ReportDefinition[] = [
     key: 'payments-by-method',
     title: 'Payments by method',
     description:
-      'Tender mix: money taken and refunded per payment method and currency (cash net of change), order deposits included when they are paid. Exchange credit and deposits applied at pickup are internal tenders and are not listed.',
+      'Tender mix: money taken and refunded per payment method and currency (cash net of the change it gave), order deposits included when they are paid, and payments received on customer accounts (all branches only). Gift cards, store credit, points, sales on account, exchange credit and deposits applied at pickup move no money and are not listed: see their own reports.',
     group: 'Payments & tax',
     usesDateRange: true,
     branchFilter: true,
@@ -464,10 +478,29 @@ export const REPORTS: ReportDefinition[] = [
           SELECT op."paymentMethodId", TRIM(o."currencyCode"), COUNT(*), SUM(op.amount)
           FROM customer_order_payments op JOIN customer_orders o ON o.id = op."orderId"
           WHERE ${ORDER_PAYMENTS_IN_PERIOD} AND op.type = 'deposit' GROUP BY 1, 2
+          UNION ALL
+          -- Money received on customer accounts (stored negative; reversals cancel
+          -- them out), in the store currency; account payments name no branch:
+          -- counted in the all-branches view only
+          SELECT ce."paymentMethodId", ${STORE_CURRENCY},
+                 COUNT(*) FILTER (WHERE ce."reversalOfId" IS NULL), SUM(0 - ce.amount)
+          FROM customer_credit_entries ce
+          WHERE ce."tenantId" = $1 AND ce.created_at >= $2 AND ce.created_at <= $3
+            AND ce.type = 'payment' AND ce."paymentMethodId" IS NOT NULL AND ${ALL_BRANCHES}
+          GROUP BY 1, 2
         ) t GROUP BY 1, 2
       ), change AS (
-        SELECT TRIM(s."currencyCode") AS currency, COALESCE(SUM(s."changeAmount"), 0) AS amount
-        FROM sales s WHERE ${IN_PERIOD} AND ${SOLD} GROUP BY 1
+        -- Change comes out of the cash the sale was paid with: its (largest) cash
+        -- payment's method, once per sale (never off every cash method)
+        SELECT id, currency, SUM(amount) AS amount FROM (
+          SELECT DISTINCT ON (s.id) p."paymentMethodId" AS id, TRIM(s."currencyCode") AS currency,
+                 s."changeAmount" AS amount
+          FROM sales s
+          JOIN payments p ON p."saleId" = s.id
+          JOIN payment_methods cm ON cm.id = p."paymentMethodId" AND cm."methodType" = 'cash'
+          WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} AND s."changeAmount" > 0
+          ORDER BY s.id, p.amount DESC
+        ) c GROUP BY 1, 2
       ), refunded AS (
         SELECT id, currency, SUM(amount) AS amount FROM (
           SELECT rf."paymentMethodId" AS id, TRIM(r."currencyCode") AS currency, SUM(rf.amount) AS amount
@@ -482,18 +515,15 @@ export const REPORTS: ReportDefinition[] = [
         SELECT id, currency FROM taken UNION SELECT id, currency FROM refunded
       )
       SELECT pm.name->>'en' AS method, pm."methodType" AS type, keys.currency, COALESCE(taken.count, 0) AS count,
-             -- change is only ever given in cash, in the sale's currency
-             COALESCE(taken.amount, 0) - CASE WHEN pm."methodType" = 'cash'
-               THEN COALESCE(change.amount, 0) ELSE 0 END AS taken,
+             COALESCE(taken.amount, 0) - COALESCE(change.amount, 0) AS taken,
              COALESCE(refunded.amount, 0) AS refunded,
-             COALESCE(taken.amount, 0) - CASE WHEN pm."methodType" = 'cash'
-               THEN COALESCE(change.amount, 0) ELSE 0 END - COALESCE(refunded.amount, 0) AS net
+             COALESCE(taken.amount, 0) - COALESCE(change.amount, 0) - COALESCE(refunded.amount, 0) AS net
       FROM keys
       JOIN payment_methods pm ON pm.id = keys.id AND pm."tenantId" = $1
-        AND pm.code NOT IN (${EXCHANGE_CREDIT_METHOD}, ${ORDER_DEPOSIT_METHOD})
+        AND pm.code NOT IN (${MONEYLESS_TENDERS})
       LEFT JOIN taken ON taken.id = keys.id AND taken.currency = keys.currency
       LEFT JOIN refunded ON refunded.id = keys.id AND refunded.currency = keys.currency
-      LEFT JOIN change ON change.currency = keys.currency
+      LEFT JOIN change ON change.id = keys.id AND change.currency = keys.currency
       ORDER BY keys.currency, net DESC`,
   },
   {

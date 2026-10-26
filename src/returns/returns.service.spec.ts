@@ -840,6 +840,7 @@ describe('ReturnsService', () => {
         TENANT,
         'loc-1',
         'damaged',
+        { createWhenMissing: true },
       );
       expect(inventoryService.applyMovement).toHaveBeenCalledWith(
         manager,

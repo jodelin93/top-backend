@@ -7,6 +7,7 @@ export const LOCKS = {
   housekeeping: 7_420_003,
   giftCardExpiry: 7_420_004,
   syncLogPrune: 7_420_005,
+  pendingPayments: 7_420_006,
 } as const;
 
 /**

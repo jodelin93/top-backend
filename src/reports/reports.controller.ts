@@ -46,6 +46,7 @@ export class ReportsController {
    * GET /reports/summary?from=&to=&timezone=&branchId=
    */
   @Get('summary')
+  @UserThrottle()
   summary(
     @CurrentTenant() tenantId: string,
     @CurrentUser() user: AuthUser,

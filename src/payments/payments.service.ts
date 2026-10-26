@@ -25,6 +25,7 @@ import {
   nextPaymentStatus,
   OPEN_PAYMENT_STATUSES,
   summarizePayments,
+  CANCELLING_TIMEOUT_MS,
 } from './payment-state';
 import {
   InvalidWebhookError,
@@ -36,6 +37,15 @@ import {
 } from './providers/payment-provider';
 import { PaymentProviderRegistry } from './providers/provider-registry';
 import { MockPaymentProvider } from './providers/mock.provider';
+
+// A webhook that came before its payment was recorded: done again on redelivery
+const NO_PAYMENT_YET = 'No payment with this reference';
+
+/** Rows of an UPDATE ... RETURNING (TypeORM answers [rows, count]) */
+const updated = <T>(result: unknown): T[] =>
+  Array.isArray(result) && result.length === 2 && Array.isArray(result[0])
+    ? (result[0] as T[])
+    : (result as T[]);
 
 const STATUS_MAP: Record<ProviderPaymentStatus, PaymentStatus> = {
   pending: PaymentStatus.PENDING,
@@ -251,13 +261,40 @@ export class PaymentsService implements OnModuleInit {
    * The new attempt gets its own idempotency key.
    */
   async retry(tenantId: string, paymentId: string): Promise<SalePaymentState> {
-    const payment = await this.findPayment(tenantId, paymentId);
-    const sale = await this.dataSource
-      .getRepository(Sale)
-      .findOneOrFail({ where: { id: payment.saleId, tenantId } });
-    if (sale.status !== SaleStatus.PAYMENT_PENDING) {
-      throw new ConflictException('This sale is not waiting for payment');
-    }
+    const found = await this.findPayment(tenantId, paymentId);
+    // Under the sale's lock, and never while the sale is being cancelled: a new
+    // charge could otherwise start on a sale the cancellation then closes
+    const sale = await this.dataSource.transaction(async (manager) => {
+      const locked = await manager.getRepository(Sale).findOneOrFail({
+        where: { id: found.saleId, tenantId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (locked.status !== SaleStatus.PAYMENT_PENDING) {
+        throw new ConflictException('This sale is not waiting for payment');
+      }
+      const cancellingAt = locked.metadata?.cancellingAt as string | undefined;
+      if (
+        cancellingAt &&
+        Date.now() - new Date(cancellingAt).getTime() < CANCELLING_TIMEOUT_MS
+      ) {
+        throw new ConflictException('This sale is being cancelled');
+      }
+      return this.startRetry(manager, tenantId, found.id, locked);
+    });
+    await this.startPayments(tenantId, sale.id);
+    return this.describe(tenantId, sale.id);
+  }
+
+  /** The new attempt, written only if the payment is still failed or cancelled */
+  private async startRetry(
+    manager: EntityManager,
+    tenantId: string,
+    paymentId: string,
+    sale: Sale,
+  ): Promise<Sale> {
+    const payment = await manager
+      .getRepository(Payment)
+      .findOneOrFail({ where: { id: paymentId, tenantId } });
     if (
       payment.status !== PaymentStatus.FAILED &&
       payment.status !== PaymentStatus.CANCELLED
@@ -279,8 +316,12 @@ export class PaymentsService implements OnModuleInit {
         failureReason: payment.failureReason,
       },
     ];
-    await this.dataSource.getRepository(Payment).update(
-      { id: payment.id, tenantId },
+    const result = await manager.getRepository(Payment).update(
+      {
+        id: payment.id,
+        tenantId,
+        status: In([PaymentStatus.FAILED, PaymentStatus.CANCELLED]),
+      },
       {
         status: PaymentStatus.INITIATED,
         idempotencyKey: `${sale.id}:${payment.id}:${attempts.length + 1}`,
@@ -291,8 +332,10 @@ export class PaymentsService implements OnModuleInit {
         metadata: { ...payment.metadata, attempts },
       },
     );
-    await this.startPayments(tenantId, sale.id);
-    return this.describe(tenantId, sale.id);
+    if (!result.affected) {
+      throw new ConflictException('This payment was retried already');
+    }
+    return sale;
   }
 
   /**
@@ -390,17 +433,30 @@ export class PaymentsService implements OnModuleInit {
       .orIgnore()
       .returning(['id'])
       .execute();
-    const eventRowId = (inserted.raw as { id: string }[])[0]?.id;
+    const events = this.dataSource.getRepository(PaymentWebhookEvent);
+    let eventRowId = (inserted.raw as { id: string }[])[0]?.id;
     if (!eventRowId) {
-      return { received: true, duplicate: true };
+      // A redelivery: ignored once the event was applied; done again when the
+      // first try failed, or came before its payment was known (the provider
+      // sends it again precisely for that)
+      const retried = updated<{ id: string }>(
+        await this.dataSource.query(
+          `UPDATE payment_webhook_events SET error = NULL
+            WHERE provider = $1 AND "eventId" = $2
+              AND ("processedAt" IS NULL OR error = $3)
+            RETURNING id`,
+          [providerName, event.eventId, NO_PAYMENT_YET],
+        ),
+      );
+      eventRowId = retried[0]?.id;
+      if (!eventRowId) return { received: true, duplicate: true };
     }
 
-    const events = this.dataSource.getRepository(PaymentWebhookEvent);
     const payment = await this.findWebhookPayment(providerName, event);
     if (!payment || !event.status) {
       await events.update(eventRowId, {
         processedAt: new Date(),
-        error: payment ? null : 'No payment with this reference',
+        error: payment ? null : NO_PAYMENT_YET,
       });
       return { received: true, matched: false };
     }

@@ -332,6 +332,17 @@ describe('orders with a deposit', () => {
       0,
     );
     expect(value).toBe(2_000);
+    const byMethod = await s.api(
+      'get',
+      `/reports/payments-by-method?from=${from}&to=${to}`,
+    );
+    expect(byMethod.status).toBe(200);
+    expect(
+      (byMethod.body.rows as { net: number }[]).reduce(
+        (a, row) => a + Number(row.net),
+        0,
+      ),
+    ).toBe(2_000);
     const summary = await s.api('get', `/reports/summary?from=${from}&to=${to}`);
     expect(summary.status).toBe(200);
     const tenders = summary.body.byPaymentMethod as {
@@ -341,5 +352,44 @@ describe('orders with a deposit', () => {
     }[];
     expect(tenders.reduce((a, row) => a + Number(row.amount), 0)).toBe(2_000);
     expect(tenders.some((row) => /deposit paid/i.test(row.name))).toBe(false);
+  });
+  it("returns a pickup sale with no approval: the deposit share goes back the way it was paid", async () => {
+    const r = await takeOrder({
+      deposit: { paymentMethodId: s.methods.CARD, amount: 3_000 },
+      idempotencyKey: `order-return-${RUN}`,
+    });
+    expect(r.status).toBe(201);
+    const pickup = await s.api('post', '/sales', {
+      registerId: s.registerId,
+      customerId,
+      orderId: r.body.id,
+      items: [{ variantId: serviceId, quantity: 1, unitPrice: 10_000 }],
+      payments: [{ paymentMethodId: s.methods.CASH, amount: 7_000 }],
+    });
+    expect(pickup.status).toBe(201);
+    const back = await s.api('post', '/returns', {
+      saleId: pickup.body.id,
+      registerId: s.registerId,
+      reason: 'Not what was ordered',
+      items: [
+        {
+          saleItemId: pickup.body.items[0].id,
+          quantity: 1,
+          disposition: 'restock',
+        },
+      ],
+      idempotencyKey: `return-${RUN}`,
+    });
+    expect(back.status).toBe(201);
+    const refunds = (
+      back.body.refunds as { paymentMethodId: string; amount: number }[]
+    )
+      .map((f) => [f.paymentMethodId, Number(f.amount)])
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+    // The cash paid at pickup comes back in cash, the card deposit by card
+    expect(refunds).toEqual([
+      [s.methods.CASH, 7_000],
+      [s.methods.CARD, 3_000],
+    ]);
   });
 });

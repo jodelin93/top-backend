@@ -90,6 +90,7 @@ import {
   StockQueryDto,
 } from './inventory.dto';
 import { containsPattern } from '../common/utils/like';
+import { isPgError, PG_UNIQUE_VIOLATION } from '../common/utils/pg-error';
 
 export interface MovementInput {
   tenantId: string;
@@ -441,6 +442,7 @@ export class InventoryService {
     tenantId: string,
     locationId: string,
     condition: GoodsCondition,
+    options: { createWhenMissing?: boolean } = {},
   ): Promise<string> {
     if (condition !== 'damaged') return locationId;
     const location = await manager.findOne(InventoryLocation, {
@@ -448,12 +450,42 @@ export class InventoryService {
       select: { id: true, warehouseId: true },
     });
     if (!location) throw new NotFoundException('Location not found');
-    const siblings = await manager.find(InventoryLocation, {
-      where: { tenantId, warehouseId: location.warehouseId },
-      select: { id: true, stockStatus: true },
-      order: { code: 'ASC' },
-    });
-    return pickConditionLocation(locationId, condition, siblings);
+    const siblings = () =>
+      manager.find(InventoryLocation, {
+        where: { tenantId, warehouseId: location.warehouseId },
+        select: { id: true, code: true, stockStatus: true },
+        order: { code: 'ASC' },
+      });
+    const picked = pickConditionLocation(
+      locationId,
+      condition,
+      await siblings(),
+    );
+    if (picked !== locationId || !options.createWhenMissing) return picked;
+    // Goods coming in damaged (a return, a receipt) never land in sellable
+    // stock: the warehouse gets its damaged location (not sellable), once
+    await manager.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+      `damaged-location:${location.warehouseId}`,
+    ]);
+    const now = await siblings();
+    const again = pickConditionLocation(locationId, condition, now);
+    if (again !== locationId) return again;
+    const taken = new Set(now.map((l) => l.code));
+    const code = taken.has('DAMAGED')
+      ? `DAMAGED-${randomUUID().slice(0, 6).toUpperCase()}`
+      : 'DAMAGED';
+    const created = await manager.save(
+      manager.create(InventoryLocation, {
+        tenantId,
+        warehouseId: location.warehouseId,
+        code,
+        name: 'Damaged',
+        locationType: LocationType.ZONE,
+        isSellable: false,
+        stockStatus: LocationStockStatus.DAMAGED,
+      }),
+    );
+    return created.id;
   }
 
   private resolveSourceKey(
@@ -980,100 +1012,140 @@ export class InventoryService {
       dto.items.map((i) => i.variantId),
     );
 
-    return this.dataSource.transaction(async (manager) => {
-      // Decimals only for measured items (a delta may be negative: check its size)
-      await assertUnitQuantities(
-        manager,
-        tenantId,
-        dto.items.map((i) => ({
-          variantId: i.variantId,
-          quantity: Math.abs(i.quantity),
-        })),
-        { allowZero: true },
-      );
-      const adjustmentNumber = await nextDocumentNumber(manager, {
-        table: 'stock_adjustments',
-        column: 'adjustmentNumber',
-        tenantId,
-        prefix: 'ADJ',
-      });
-
-      const adjustment = await manager.save(
-        manager.create(StockAdjustment, {
+    const replay = () => this.adjustmentByKey(tenantId, dto.idempotencyKey);
+    const done = await replay();
+    if (done) return done;
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        // Decimals only for measured items (a delta may be negative: check its size)
+        await assertUnitQuantities(
+          manager,
           tenantId,
-          adjustmentNumber,
-          locationId: dto.locationId,
-          reason: dto.reason,
-          userId,
-          notes: dto.notes,
-          status: AdjustmentStatus.COMPLETED,
-        }),
-      );
-
-      const results: { variantId: string; before: number; after: number }[] =
-        [];
-      for (const item of dto.items) {
-        let delta = item.quantity;
-        let before = 0;
-        if (dto.mode === 'set') {
-          if (item.quantity < 0) {
-            throw new BadRequestException(
-              'Counted quantities cannot be negative',
-            );
-          }
-          const current = await manager.findOne(StockLevel, {
-            where: {
-              tenantId,
-              variantId: item.variantId,
-              locationId: dto.locationId,
-            },
-            lock: { mode: 'pessimistic_write' },
-          });
-          before = Number(current?.quantityOnHand ?? 0);
-          delta = subQty(item.quantity, before);
-        }
-
-        const level = await this.applyMovement(manager, {
+          dto.items.map((i) => ({
+            variantId: i.variantId,
+            quantity: Math.abs(i.quantity),
+          })),
+          { allowZero: true },
+        );
+        const adjustmentNumber = await nextDocumentNumber(manager, {
+          table: 'stock_adjustments',
+          column: 'adjustmentNumber',
           tenantId,
-          userId,
-          variantId: item.variantId,
-          locationId: dto.locationId,
-          delta,
-          movementType: ADJUSTMENT_MOVEMENT[dto.reason],
-          referenceType: 'adjustment',
-          referenceId: adjustment.id,
-          referenceNumber: adjustmentNumber,
-          notes: dto.notes,
-          // D018: never below zero on hand. An adjustment records what is
-          // physically there, so reserved units don't block it.
-          respectReservations: false,
+          prefix: 'ADJ',
         });
-        results.push({
-          variantId: item.variantId,
-          before:
-            dto.mode === 'set' ? before : subQty(level.quantityOnHand, delta),
-          after: level.quantityOnHand,
-        });
-      }
 
-      await this.auditService.record(
-        {
-          tenantId,
-          action: 'inventory.adjusted',
-          entityType: 'stock_adjustment',
-          entityId: adjustment.id,
-          reason: dto.notes ?? dto.reason,
-          metadata: {
+        const adjustment = await manager.save(
+          manager.create(StockAdjustment, {
+            tenantId,
             adjustmentNumber,
             locationId: dto.locationId,
             reason: dto.reason,
-            items: results,
+            userId,
+            notes: dto.notes,
+            status: AdjustmentStatus.COMPLETED,
+          }),
+        );
+
+        const results: { variantId: string; before: number; after: number }[] =
+          [];
+        for (const item of dto.items) {
+          let delta = item.quantity;
+          let before = 0;
+          if (dto.mode === 'set') {
+            if (item.quantity < 0) {
+              throw new BadRequestException(
+                'Counted quantities cannot be negative',
+              );
+            }
+            // The row first (none yet: a receipt at the same moment would create
+            // it unlocked and be counted twice), then its lock
+            await manager.query(
+              `INSERT INTO stock_levels ("tenantId", "variantId", "locationId")
+             VALUES ($1, $2, $3) ON CONFLICT ON CONSTRAINT uq_stock_variant_location DO NOTHING`,
+              [tenantId, item.variantId, dto.locationId],
+            );
+            const current = await manager.findOne(StockLevel, {
+              where: {
+                tenantId,
+                variantId: item.variantId,
+                locationId: dto.locationId,
+              },
+              lock: { mode: 'pessimistic_write' },
+            });
+            before = Number(current?.quantityOnHand ?? 0);
+            delta = subQty(item.quantity, before);
+          }
+
+          const level = await this.applyMovement(manager, {
+            tenantId,
+            userId,
+            variantId: item.variantId,
+            locationId: dto.locationId,
+            delta,
+            movementType: ADJUSTMENT_MOVEMENT[dto.reason],
+            referenceType: 'adjustment',
+            referenceId: adjustment.id,
+            referenceNumber: adjustmentNumber,
+            notes: dto.notes,
+            ...(dto.idempotencyKey && {
+              sourceKey: `adjustment:${dto.idempotencyKey}:${results.length}`,
+            }),
+            // D018: never below zero on hand. An adjustment records what is
+            // physically there, so reserved units don't block it.
+            respectReservations: false,
+          });
+          results.push({
+            variantId: item.variantId,
+            before:
+              dto.mode === 'set' ? before : subQty(level.quantityOnHand, delta),
+            after: level.quantityOnHand,
+          });
+        }
+
+        await this.auditService.record(
+          {
+            tenantId,
+            action: 'inventory.adjusted',
+            entityType: 'stock_adjustment',
+            entityId: adjustment.id,
+            reason: dto.notes ?? dto.reason,
+            metadata: {
+              adjustmentNumber,
+              locationId: dto.locationId,
+              reason: dto.reason,
+              items: results,
+            },
           },
-        },
-        manager,
-      );
-      return { ...adjustment, items: results };
-    });
+          manager,
+        );
+        return { ...adjustment, items: results };
+      });
+    } catch (error) {
+      // The same attempt committed meanwhile: its result, not a second change
+      if (
+        dto.idempotencyKey &&
+        isPgError(error, PG_UNIQUE_VIOLATION, 'uq_stock_movements_source_event')
+      ) {
+        const first = await replay();
+        if (first) return first;
+      }
+      throw error;
+    }
+  }
+
+  /** The adjustment an idempotency key already made (its first movement names it) */
+  private async adjustmentByKey(tenantId: string, key?: string) {
+    if (!key) return null;
+    const [row] = await this.dataSource.query<{ id: string }[]>(
+      `SELECT "referenceId" AS id FROM stock_movements
+        WHERE "tenantId" = $1 AND "sourceEventId" = $2 LIMIT 1`,
+      [tenantId, `adjustment:${key}:0`],
+    );
+    if (!row?.id) return null;
+    const adjustment = await this.dataSource
+      .getRepository(StockAdjustment)
+      .findOne({ where: { tenantId, id: row.id } });
+    return adjustment ? { ...adjustment, items: [], replayed: true } : null;
   }
 
   /**
@@ -1094,46 +1166,84 @@ export class InventoryService {
       ...new Set(dto.items.map((i) => i.variantId)),
     ]);
 
-    return this.dataSource.transaction(async (manager) => {
-      await assertUnitQuantities(manager, tenantId, dto.items);
-      // Costing (average / FIFO layers) happens inside applyMovement
-      const levels: StockLevel[] = [];
-      for (const item of dto.items) {
-        // Damaged goods go to the warehouse's quarantine location, if any
-        const locationId = await this.resolveConditionLocation(
-          manager,
-          tenantId,
-          dto.locationId,
-          item.condition ?? 'good',
-        );
-        levels.push(
-          await this.applyMovement(manager, {
+    const received = () => this.receiptByKey(tenantId, dto);
+    const done = await received();
+    if (done) return done;
+    try {
+      return await this.dataSource.transaction(async (manager) => {
+        await assertUnitQuantities(manager, tenantId, dto.items);
+        // Costing (average / FIFO layers) happens inside applyMovement
+        const levels: StockLevel[] = [];
+        for (const item of dto.items) {
+          // Damaged goods go to the warehouse's quarantine location, if any
+          const locationId = await this.resolveConditionLocation(
+            manager,
             tenantId,
-            userId,
-            variantId: item.variantId,
-            locationId,
-            delta: item.quantity,
-            movementType: MovementType.PURCHASE,
-            referenceType: 'receipt',
-            referenceNumber: dto.reference,
-            cost: item.cost,
-            notes: dto.notes,
-            metadata:
-              item.condition === 'damaged' ? { condition: 'damaged' } : {},
-          }),
+            dto.locationId,
+            item.condition ?? 'good',
+            { createWhenMissing: true },
+          );
+          levels.push(
+            await this.applyMovement(manager, {
+              tenantId,
+              userId,
+              variantId: item.variantId,
+              locationId,
+              delta: item.quantity,
+              movementType: MovementType.PURCHASE,
+              referenceType: 'receipt',
+              referenceNumber: dto.reference,
+              cost: item.cost,
+              notes: dto.notes,
+              metadata:
+                item.condition === 'damaged' ? { condition: 'damaged' } : {},
+              ...(dto.idempotencyKey && {
+                sourceKey: `receive:${dto.idempotencyKey}:${levels.length}`,
+              }),
+            }),
+          );
+        }
+        await this.auditService.record(
+          {
+            tenantId,
+            action: 'inventory.received',
+            entityType: 'stock_receipt',
+            entityId: dto.reference ?? null,
+            metadata: { locationId: dto.locationId, items: dto.items },
+          },
+          manager,
         );
+        return levels;
+      });
+    } catch (error) {
+      if (
+        dto.idempotencyKey &&
+        isPgError(error, PG_UNIQUE_VIOLATION, 'uq_stock_movements_source_event')
+      ) {
+        const first = await received();
+        if (first) return first;
       }
-      await this.auditService.record(
-        {
-          tenantId,
-          action: 'inventory.received',
-          entityType: 'stock_receipt',
-          entityId: dto.reference ?? null,
-          metadata: { locationId: dto.locationId, items: dto.items },
-        },
-        manager,
-      );
-      return levels;
+      throw error;
+    }
+  }
+
+  /** Received already under this key: the stock levels now (nothing posted again) */
+  private async receiptByKey(tenantId: string, dto: ReceiveStockDto) {
+    if (!dto.idempotencyKey) return null;
+    const rows = await this.dataSource.query<
+      { variantId: string; locationId: string }[]
+    >(
+      `SELECT "variantId", "toLocationId" AS "locationId" FROM stock_movements
+        WHERE "tenantId" = $1 AND "sourceEventId" LIKE $2`,
+      [tenantId, `receive:${dto.idempotencyKey.replace(/[\\%_]/g, '\\$&')}:%`],
+    );
+    if (!rows.length) return null;
+    return this.dataSource.getRepository(StockLevel).find({
+      where: rows.map((r) => ({
+        tenantId,
+        variantId: r.variantId,
+        locationId: r.locationId,
+      })),
     });
   }
 

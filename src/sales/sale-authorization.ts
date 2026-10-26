@@ -1,6 +1,11 @@
 import { ForbiddenException } from '@nestjs/common';
 import type { Permission } from '../auth/permissions';
-import { calculateSale, CalcLineInput, CalcOptions } from './sale-calculator';
+import {
+  calculateSale,
+  CalcLineInput,
+  CalcOptions,
+  samePrice,
+} from './sale-calculator';
 
 /**
  * Till authorisations (R044): which permissions a cart needs.
@@ -68,7 +73,7 @@ export function requiredOverrides(
         );
       }
     }
-    if (round(line.unitPrice) !== round(line.catalogPrice)) {
+    if (!samePrice(line.unitPrice, line.catalogPrice)) {
       permissions.add('pos.price.override');
       reasons.push(
         `Line ${index + 1}: price ${line.catalogPrice.toFixed(2)} → ${line.unitPrice.toFixed(2)}`,

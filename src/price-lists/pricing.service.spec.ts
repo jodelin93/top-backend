@@ -132,3 +132,48 @@ describe('PricingService.customerGroupPricing', () => {
     ).resolves.toBeNull();
   });
 });
+
+describe('PricingService.resolvePrices quantity breaks', () => {
+  // Entries as the query returns them (tightest quantity break first)
+  const entries = [
+    { variantId: 'a', minQuantity: 10, price: '8.00' },
+    { variantId: 'a', minQuantity: null, price: '9.00' },
+    { variantId: 'b', minQuantity: 10, price: '4.00' },
+  ];
+  const qb: Record<string, jest.Mock> = {};
+  for (const name of [
+    'innerJoin',
+    'where',
+    'andWhere',
+    'orderBy',
+    'setParameter',
+    'addOrderBy',
+  ])
+    qb[name] = jest.fn(() => qb);
+  qb.getMany = jest.fn(() => Promise.resolve(entries));
+  const service = new PricingService({
+    createQueryBuilder: () => qb,
+  } as unknown as Repository<PriceEntry>);
+  const variants = [
+    { id: 'a', price: 10 },
+    { id: 'b', price: 5 },
+  ];
+
+  it('applies a break to the quantity bought of that variant', async () => {
+    const prices = await service.resolvePrices('t1', variants, {
+      quantities: new Map([
+        ['a', 12],
+        ['b', 3],
+      ]),
+    });
+    expect(prices.get('a')).toBe(8);
+    // 3 of b: below its break, the catalog price
+    expect(prices.get('b')).toBe(5);
+  });
+
+  it('prices one unit when no quantity is given', async () => {
+    const prices = await service.resolvePrices('t1', variants);
+    expect(prices.get('a')).toBe(9);
+    expect(prices.get('b')).toBe(5);
+  });
+});

@@ -10,7 +10,13 @@ import {
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
-import { IsOnOrAfterField } from '../common/validation/date-rules';
+import {
+  IsOnOrAfterField,
+  IsAtMostDaysAfterField,
+} from '../common/validation/date-rules';
+
+// The longest period a report runs over (a year and a month)
+export const MAX_REPORT_DAYS = 400;
 
 @ValidatorConstraint({ name: 'timeZone' })
 class IsTimeZone implements ValidatorConstraintInterface {
@@ -33,7 +39,10 @@ class IsTimeZone implements ValidatorConstraintInterface {
 
 export class ReportQueryDto {
   @IsDateString() from: string;
-  @IsDateString() @IsOnOrAfterField('from') to: string;
+  @IsDateString()
+  @IsOnOrAfterField('from')
+  @IsAtMostDaysAfterField('from', MAX_REPORT_DAYS)
+  to: string;
   // Used to group sales by local calendar day, e.g. America/New_York
   @IsString()
   @MaxLength(64)
@@ -47,7 +56,11 @@ export class ReportQueryDto {
 // Tabular reports: snapshot reports (stock) don't need a date range
 export class RunReportQueryDto {
   @IsDateString() @IsOptional() from?: string;
-  @IsDateString() @IsOnOrAfterField('from') @IsOptional() to?: string;
+  @IsDateString()
+  @IsOnOrAfterField('from')
+  @IsAtMostDaysAfterField('from', MAX_REPORT_DAYS)
+  @IsOptional()
+  to?: string;
   @IsString()
   @MaxLength(64)
   @Validate(IsTimeZone)

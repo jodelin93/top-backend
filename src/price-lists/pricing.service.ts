@@ -28,6 +28,9 @@ export interface PricingContext {
   // Explicitly chosen list (e.g. wholesale); otherwise only standard/promotional lists apply
   priceListId?: string | null;
   quantity?: number;
+  // Quantity of each variant in the cart: a quantity break ("10 or more")
+  // applies per variant, to the quantity bought of it
+  quantities?: ReadonlyMap<string, number>;
   at?: Date;
 }
 
@@ -53,7 +56,13 @@ export class PricingService {
     }
 
     const at = context.at ?? new Date();
-    const quantity = context.quantity ?? 1;
+    const quantityOf = (variantId: string) =>
+      context.quantities?.get(variantId) ?? context.quantity ?? 1;
+    // Entries up to the largest quantity asked; the right one per variant below
+    const quantity = Math.max(
+      context.quantity ?? 1,
+      ...(context.quantities ? [...context.quantities.values()] : []),
+    );
 
     const query = this.entryRepository
       .createQueryBuilder('entry')
@@ -95,6 +104,8 @@ export class PricingService {
     const entries = await query.getMany();
     const resolved = new Set<string>();
     for (const entry of entries) {
+      const min = entry.minQuantity === null ? null : Number(entry.minQuantity);
+      if (min !== null && min > quantityOf(entry.variantId)) continue;
       if (!resolved.has(entry.variantId)) {
         prices.set(entry.variantId, Number(entry.price));
         resolved.add(entry.variantId);

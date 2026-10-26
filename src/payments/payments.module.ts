@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
+import { PendingPaymentSweepService } from './pending-payment-sweep.service';
 import { ReconciliationService } from './reconciliation.service';
 import { PaymentProviderRegistry } from './providers/provider-registry';
 import {
@@ -14,7 +15,12 @@ import {
  */
 @Module({
   controllers: [PaymentsController, PaymentWebhooksController],
-  providers: [PaymentsService, ReconciliationService, PaymentProviderRegistry],
+  providers: [
+    PaymentsService,
+    ReconciliationService,
+    PaymentProviderRegistry,
+    PendingPaymentSweepService,
+  ],
   exports: [PaymentsService, PaymentProviderRegistry],
 })
 export class PaymentsModule {}

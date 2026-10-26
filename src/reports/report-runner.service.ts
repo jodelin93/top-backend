@@ -28,6 +28,7 @@ import {
   TotalsAccumulator,
 } from './report-files';
 import type { Writable } from 'stream';
+import { withReportTimeout } from './report-timeout';
 
 type Row = Record<string, unknown>;
 
@@ -207,9 +208,8 @@ export class ReportRunnerService {
     scope?: ReportScope,
   ): Promise<ReportResult> {
     const prepared = this.prepare(tenantId, key, query, permissions, scope);
-    const raw = await this.dataSource.query<Row[]>(
-      prepared.sql,
-      prepared.values,
+    const raw = await withReportTimeout(this.dataSource, (manager) =>
+      manager.query<Row[]>(prepared.sql, prepared.values),
     );
     const rows = normaliseRows(raw, prepared.columns);
     const { totals, mixedCurrencies } = reportTotals(prepared.columns, rows);

@@ -768,3 +768,86 @@ describe('InventoryService with decimal (measured) quantities', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 });
+
+describe('InventoryService.resolveConditionLocation', () => {
+  const service = () => ({
+    inventory: new InventoryService(
+      {} as never,
+      {} as never,
+      { getSettings: jest.fn() } as unknown as SettingsService,
+      {} as never,
+      { record: jest.fn() } as unknown as AuditService,
+    ),
+  });
+  const managerWith = (
+    sibling: { id: string; code: string; stockStatus: string }[],
+  ) => {
+    const saved: Record<string, unknown>[] = [];
+    const manager = {
+      findOne: jest.fn(() =>
+        Promise.resolve({ id: 'shelf', warehouseId: 'w1' }),
+      ),
+      find: jest.fn(() => Promise.resolve(sibling)),
+      query: jest.fn(() => Promise.resolve([])),
+      create: jest.fn((_e: unknown, data: Record<string, unknown>) => data),
+      save: jest.fn((data: Record<string, unknown>) => {
+        saved.push(data);
+        return Promise.resolve({ id: 'damaged-new', ...data });
+      }),
+    };
+    return { manager, saved };
+  };
+
+  it('creates the warehouse damaged location (not sellable) when it has none', async () => {
+    const { inventory } = service();
+    const { manager, saved } = managerWith([
+      { id: 'shelf', code: 'SHELF', stockStatus: 'sellable' },
+    ]);
+    const id = await inventory.resolveConditionLocation(
+      manager as never,
+      't',
+      'shelf',
+      'damaged',
+      { createWhenMissing: true },
+    );
+    expect(id).toBe('damaged-new');
+    expect(saved[0]).toMatchObject({
+      warehouseId: 'w1',
+      code: 'DAMAGED',
+      isSellable: false,
+      stockStatus: 'damaged',
+    });
+    // Without the option (transfers decide themselves): the location asked for
+    const { manager: other } = managerWith([
+      { id: 'shelf', code: 'SHELF', stockStatus: 'sellable' },
+    ]);
+    await expect(
+      inventory.resolveConditionLocation(
+        other as never,
+        't',
+        'shelf',
+        'damaged',
+      ),
+    ).resolves.toBe('shelf');
+  });
+
+  it('uses an existing damaged or quarantine location', async () => {
+    const { inventory } = service();
+    const { manager, saved } = managerWith([
+      { id: 'shelf', code: 'SHELF', stockStatus: 'sellable' },
+      { id: 'q', code: 'Q', stockStatus: 'quarantine' },
+    ]);
+    await expect(
+      inventory.resolveConditionLocation(
+        manager as never,
+        't',
+        'shelf',
+        'damaged',
+        {
+          createWhenMissing: true,
+        },
+      ),
+    ).resolves.toBe('q');
+    expect(saved).toHaveLength(0);
+  });
+});

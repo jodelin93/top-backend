@@ -293,6 +293,8 @@ export class SupplierReturnLineDto {
 export class CreateSupplierReturnDto {
   @IsUUID() receiptId: string;
   @IsString() @MinLength(1) @MaxLength(500) reason: string;
+  // One per attempt: a retry (double click, lost answer) returns goods once
+  @IsString() @IsOptional() @MaxLength(100) idempotencyKey?: string;
   // Supplier's return authorisation (RMA) number
   @IsString() @IsOptional() @MaxLength(100) reference?: string;
 

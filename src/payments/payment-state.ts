@@ -102,3 +102,10 @@ export function summarizePayments(
   }
   return 'open';
 }
+
+/**
+ * How long a sale stays flagged as being cancelled (metadata.cancellingAt):
+ * meanwhile nothing completes it and no payment is retried; a flag left by a
+ * cancellation that crashed expires after this.
+ */
+export const CANCELLING_TIMEOUT_MS = 2 * 60_000;

@@ -1163,6 +1163,7 @@ export class PurchaseOrdersService {
           tenantId,
           input.locationId,
           'damaged',
+          { createWhenMissing: true },
         )
       : input.locationId;
 

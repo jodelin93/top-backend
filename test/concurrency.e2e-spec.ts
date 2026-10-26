@@ -59,6 +59,14 @@ function withStore(label: string, fn: (s: () => Store) => void) {
         baseUrl,
         label.split(' ')[0].toLowerCase(),
       );
+      // Races of sales, not of cash sessions: selling without one (the store
+      // default asks for one; blocks that need a session open it themselves)
+      const r = await store.api('patch', '/settings', {
+        requireOpenShift: false,
+      });
+      if (r.status >= 300) {
+        throw new Error(`settings: ${r.status} ${JSON.stringify(r.body)}`);
+      }
     });
     afterAll(async () => {
       await dropStore(dataSource, store);
@@ -387,6 +395,49 @@ withStore('AC09 goods receipt', (store) => {
     expect(
       await ledgerBalance(dataSource, s.tenantId, variantId, s.locationId),
     ).toBe(received);
+  });
+});
+
+withStore('Ad-hoc receipt retried', (store) => {
+  it('the same receipt and adjustment sent twice at once change stock once', async () => {
+    const s = store();
+    const { variantId } = await stockedProduct(s, `RCV-${RUN}`, 5, 0);
+    const key = `rcv-${RUN}`;
+    const receive = () =>
+      s.api('post', '/inventory/receive', {
+        locationId: s.locationId,
+        reference: 'E2E retry',
+        items: [{ variantId, quantity: 4, cost: 1 }],
+        idempotencyKey: key,
+      });
+    const both = await Promise.all([receive(), receive()]);
+    expect(both.map((r) => [r.status, ok(r.status) ? '' : JSON.stringify(r.body)])).toEqual([
+      [both[0].status, ''],
+      [both[1].status, ''],
+    ]);
+    expect(both.every((r) => ok(r.status))).toBe(true);
+    expect(await onHand(dataSource, s.tenantId, variantId, s.locationId)).toBe(
+      4,
+    );
+    // Again later: still once
+    expect(ok((await receive()).status)).toBe(true);
+    expect(await onHand(dataSource, s.tenantId, variantId, s.locationId)).toBe(
+      4,
+    );
+
+    const adjust = () =>
+      s.api('post', '/inventory/adjustments', {
+        locationId: s.locationId,
+        reason: 'damage',
+        mode: 'delta',
+        items: [{ variantId, quantity: -1 }],
+        idempotencyKey: `adj-${RUN}`,
+      });
+    const twice = await Promise.all([adjust(), adjust()]);
+    expect(twice.every((r) => ok(r.status))).toBe(true);
+    expect(await onHand(dataSource, s.tenantId, variantId, s.locationId)).toBe(
+      3,
+    );
   });
 });
 

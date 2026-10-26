@@ -368,6 +368,7 @@ describe('PurchaseOrdersService: receipt stock locations and events', () => {
       't',
       'loc',
       'damaged',
+      { createWhenMissing: true },
     );
     expect(applyMovement).toHaveBeenCalledTimes(2);
     expect(applyMovement).toHaveBeenCalledWith(
