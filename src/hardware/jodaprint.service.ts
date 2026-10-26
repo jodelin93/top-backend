@@ -61,22 +61,36 @@ export class JodaPrintService {
         .get<string>('JODAPRINT_SIGNING_KEY')
         ?.replace(/\\n/g, '\n')
         .trim() || null;
-    return { orgId, keyId, privateKey };
+    // The stores this JodaPrint organization belongs to (comma-separated ids).
+    // Its signatures name no store or till: any agent of the organization
+    // accepts them, so only these stores may get them. Empty: every store (one
+    // business per server)
+    const tenantIds = (this.config.get<string>('JODAPRINT_TENANT_IDS') ?? '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean);
+    return { orgId, keyId, privateKey, tenantIds };
   }
 
   /** What the POS page needs to talk to the agent (no secret) */
-  publicConfig(): { enabled: boolean; orgId: string | null } {
-    const { orgId, keyId, privateKey } = this.settings();
-    const enabled = !!(orgId && keyId && privateKey);
+  publicConfig(tenantId?: string | null): {
+    enabled: boolean;
+    orgId: string | null;
+  } {
+    const { orgId, keyId, privateKey, tenantIds } = this.settings();
+    const enabled =
+      !!(orgId && keyId && privateKey) &&
+      (!tenantIds.length || (!!tenantId && tenantIds.includes(tenantId)));
     return { enabled, orgId: enabled ? orgId : null };
   }
 
   async sign(
     payload: JodaPrintSignPayload,
     permissions: readonly Permission[],
+    tenantId?: string | null,
   ): Promise<JodaPrintSignature> {
     const { orgId } = this.settings();
-    if (!this.publicConfig().enabled || !orgId) {
+    if (!this.publicConfig(tenantId).enabled || !orgId) {
       throw new NotFoundException('JodaPrint is not set up on this server');
     }
     if (!(JODAPRINT_METHODS as readonly string[]).includes(payload.method)) {

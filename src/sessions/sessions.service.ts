@@ -25,6 +25,8 @@ const CACHE_MAX_ENTRIES = 10_000;
 
 interface CachedSession {
   userId: string;
+  // The store the session is in now (a store switch moves it)
+  tenantId: string | null;
   revokedAt: Date | null;
   expiresAt: Date;
   lastSeenAt: Date;
@@ -106,9 +108,15 @@ export class SessionsService {
 
   /**
    * Is the session behind a token still usable? Cached briefly; lastSeenAt is
-   * refreshed at most every few minutes.
+   * refreshed at most every few minutes. A token naming another store than the
+   * session's (issued before a store switch) is no longer valid: signing the
+   * session out of its store must stop it too.
    */
-  async check(sessionId: string, userId: string): Promise<SessionStatus> {
+  async check(
+    sessionId: string,
+    userId: string,
+    tenantId?: string | null,
+  ): Promise<SessionStatus> {
     const now = new Date();
     let entry = this.cache.get(sessionId);
     if (!entry || Date.now() - entry.cachedAt > CACHE_TTL_MS) {
@@ -117,6 +125,7 @@ export class SessionsService {
         select: {
           id: true,
           userId: true,
+          tenantId: true,
           revokedAt: true,
           expiresAt: true,
           lastSeenAt: true,
@@ -128,6 +137,7 @@ export class SessionsService {
       }
       entry = {
         userId: row.userId,
+        tenantId: row.tenantId ?? null,
         revokedAt: row.revokedAt,
         expiresAt: row.expiresAt,
         lastSeenAt: row.lastSeenAt,
@@ -136,6 +146,9 @@ export class SessionsService {
       this.remember(sessionId, entry);
     }
     if (entry.userId !== userId) return 'revoked';
+    if (tenantId && entry.tenantId && entry.tenantId !== tenantId) {
+      return 'revoked';
+    }
 
     const status = sessionStatus(entry, now);
     if (status === 'active' && shouldTouch(entry.lastSeenAt, now)) {

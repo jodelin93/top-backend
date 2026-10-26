@@ -312,6 +312,10 @@ export class RegistersService extends TenantCrudService<Register> {
   }
 }
 
+// Payment methods and tax rates apply to every branch: changed by people who
+// work in every branch only
+const STORE_WIDE = 'Store-wide settings need access to every branch';
+
 @Injectable()
 export class PaymentMethodsService extends TenantCrudService<PaymentMethod> {
   protected readonly entityName = 'Payment method';
@@ -320,6 +324,21 @@ export class PaymentMethodsService extends TenantCrudService<PaymentMethod> {
     @InjectRepository(PaymentMethod) repository: Repository<PaymentMethod>,
   ) {
     super(repository);
+  }
+
+  async create(tenantId: string, data: DeepPartial<PaymentMethod>) {
+    assertAllBranches(null, STORE_WIDE);
+    return super.create(tenantId, data);
+  }
+
+  async update(tenantId: string, id: string, data: DeepPartial<PaymentMethod>) {
+    assertAllBranches(null, STORE_WIDE);
+    return super.update(tenantId, id, data);
+  }
+
+  async remove(tenantId: string, id: string) {
+    assertAllBranches(null, STORE_WIDE);
+    return super.remove(tenantId, id);
   }
 }
 
@@ -332,6 +351,7 @@ export class TaxRatesService extends TenantCrudService<TaxRate> {
   }
 
   async create(tenantId: string, data: DeepPartial<TaxRate>) {
+    assertAllBranches(null, STORE_WIDE);
     this.assertPercentage(data);
     // Validated DTOs carry undefined keys, so a spread default would be overwritten
     return super.create(tenantId, {
@@ -341,8 +361,14 @@ export class TaxRatesService extends TenantCrudService<TaxRate> {
   }
 
   async update(tenantId: string, id: string, data: DeepPartial<TaxRate>) {
+    assertAllBranches(null, STORE_WIDE);
     this.assertPercentage(data);
     return super.update(tenantId, id, data);
+  }
+
+  async remove(tenantId: string, id: string) {
+    assertAllBranches(null, STORE_WIDE);
+    return super.remove(tenantId, id);
   }
 
   // Sales tax math only supports percentage rates for now

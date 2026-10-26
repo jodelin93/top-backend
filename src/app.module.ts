@@ -50,6 +50,7 @@ import {
   isThrottleEnabled,
   tenantThrottle,
 } from './config/throttle.config';
+import { dbSsl } from './database/db-ssl';
 import {
   TENANT_THROTTLER,
   TenantThrottlerGuard,
@@ -88,10 +89,13 @@ import {
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: false, // Schema changes go through migrations only
         logging: configService.get('DB_LOGGING') === 'true',
-        ssl:
-          configService.get('DB_SSL') === 'true'
-            ? { rejectUnauthorized: false }
-            : false,
+        ssl: dbSsl({
+          DB_SSL: configService.get('DB_SSL'),
+          DB_SSL_CA: configService.get('DB_SSL_CA'),
+          DB_SSL_REJECT_UNAUTHORIZED: configService.get(
+            'DB_SSL_REJECT_UNAUTHORIZED',
+          ),
+        }),
         extra: {
           // node-postgres pool
           max: Number(configService.get('DB_POOL_MAX') ?? 20),

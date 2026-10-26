@@ -3,6 +3,7 @@ import { memoryStorage } from 'multer';
 import { MAX_LOGO_BYTES } from './settings.service';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import {
+  ForbiddenException,
   Body,
   Controller,
   Get,
@@ -21,6 +22,9 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthUser } from '../auth/strategies/jwt.strategy';
+import { assertAllBranches } from '../auth/branch-scope';
 import { CurrentTenant } from '../auth/decorators/current-tenant.decorator';
 import { AuditService } from '../audit/audit.service';
 import {
@@ -62,6 +66,9 @@ import { InventoryLocation } from '../database/entities/inventory-location.entit
 import { PaymentMethod } from '../database/entities/payment-method.entity';
 import { TaxRate } from '../database/entities/tax-rate.entity';
 
+// Store-wide: changed by people who work in every branch only
+const STORE_WIDE = 'Store-wide settings need access to every branch';
+
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiTags('Settings')
 @ApiBearerAuth('JWT-auth')
@@ -91,6 +98,7 @@ export class SettingsController {
     @CurrentTenant() tenantId: string,
     @UploadedFile() file: Express.Multer.File | undefined,
   ) {
+    assertAllBranches(null, STORE_WIDE);
     return this.settingsService.uploadLogo(tenantId, file);
   }
 
@@ -101,6 +109,7 @@ export class SettingsController {
   @Delete('logo')
   @RequirePermissions('settings.manage')
   removeLogo(@CurrentTenant() tenantId: string) {
+    assertAllBranches(null, STORE_WIDE);
     return this.settingsService.updateSettings(tenantId, {
       businessLogoUrl: '',
     });
@@ -111,8 +120,19 @@ export class SettingsController {
   @Idempotent('settings.update')
   updateSettings(
     @CurrentTenant() tenantId: string,
+    @CurrentUser() user: AuthUser,
     @Body() dto: UpdateStoreSettingsDto,
   ) {
+    assertAllBranches(user, STORE_WIDE);
+    // Who must use two-factor sign-in: decided by those who manage the users
+    if (
+      dto.requireMfaForAdmins !== undefined &&
+      !user.permissions.includes('users.manage')
+    ) {
+      throw new ForbiddenException(
+        'Requiring two-factor sign-in needs the permission to manage users',
+      );
+    }
     return this.settingsService.updateSettings(tenantId, dto);
   }
 
@@ -149,6 +169,7 @@ export class SettingsController {
     @CurrentTenant() tenantId: string,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
+    assertAllBranches(null, STORE_WIDE);
     return this.settingsService.cancelVersion(tenantId, id);
   }
 
@@ -158,6 +179,7 @@ export class SettingsController {
   @Post('initialize')
   @RequirePermissions('settings.manage')
   initialize(@CurrentTenant() tenantId: string) {
+    assertAllBranches(null, STORE_WIDE);
     return this.settingsService.initializeDefaults(tenantId);
   }
 }

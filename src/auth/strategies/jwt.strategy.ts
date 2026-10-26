@@ -79,7 +79,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     // Revoked or expired session (logout, "sign out everywhere", suspension...)
-    const status = await this.sessionsService.check(payload.sid, userId);
+    const status = await this.sessionsService.check(
+      payload.sid,
+      userId,
+      payload.tid ?? null,
+    );
     if (status !== 'active') {
       throw new UnauthorizedException('Your session has ended. Sign in again.');
     }

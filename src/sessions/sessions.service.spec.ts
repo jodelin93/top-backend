@@ -152,6 +152,17 @@ describe('SessionsService', () => {
     await expect(service.check('s2', 'someone-else')).resolves.toBe('revoked');
   });
 
+  it('rejects a token of the store the session switched away from', async () => {
+    session('s4', { tenantId: 't2' });
+    // Token issued for t1 before the switch to t2: no longer valid
+    await expect(service.check('s4', 'u1', 't1')).resolves.toBe('revoked');
+    await expect(service.check('s4', 'u1', 't2')).resolves.toBe('active');
+    // After the switch back (setTenant drops the cached store)
+    await service.setTenant('s4', 'u1', 't1');
+    rows.get('s4')!.tenantId = 't1';
+    await expect(service.check('s4', 'u1', 't2')).resolves.toBe('revoked');
+  });
+
   it('rejects expired sessions', async () => {
     session('s3', { expiresAt: new Date(Date.now() - 1000) });
     await expect(service.check('s3', 'u1')).resolves.toBe('expired');

@@ -40,6 +40,9 @@ export const envSchema = Joi.object<Record<string, unknown>>({
   DB_SYNCHRONIZE: Joi.string().valid('false').default('false'),
   DB_LOGGING: bool().default('false'),
   DB_SSL: bool().default('false'),
+  // The database server's certificate (PEM): checked when set (see database/db-ssl.ts)
+  DB_SSL_CA: Joi.string().empty('').optional(),
+  DB_SSL_REJECT_UNAUTHORIZED: bool().default('false'),
   DB_POOL_MAX: Joi.number().integer().min(1).default(20),
   DB_IDLE_TIMEOUT: Joi.number().integer().min(0).default(30000),
 
@@ -86,6 +89,8 @@ export const envSchema = Joi.object<Record<string, unknown>>({
   // browser dialog). The signing key is the Ed25519 private key shown once in the
   // JodaPrint dashboard (PEM or base64 seed).
   JODAPRINT_ORG_ID: Joi.string().empty('').optional(),
+  // The stores (tenant ids) this JodaPrint organization belongs to; empty: every store
+  JODAPRINT_TENANT_IDS: Joi.string().empty('').optional(),
   JODAPRINT_KEY_ID: Joi.string().empty('').optional(),
   JODAPRINT_SIGNING_KEY: Joi.string().empty('').optional(),
 

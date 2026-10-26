@@ -1,3 +1,4 @@
+import { inflateRawSync } from 'node:zlib';
 import * as ExcelJS from 'exceljs';
 import { CsvFormatError, MAX_IMPORT_ROWS } from './product-csv';
 
@@ -82,13 +83,80 @@ export function cellText(value: ExcelJS.CellValue): string {
   return '';
 }
 
+/**
+ * Does the archive really unpack within `limit` bytes? Each entry is inflated
+ * with an output cap (never more memory than the limit), because the sizes a
+ * zip declares can lie. null: the archive can't be read that way.
+ */
+export function zipFitsWithin(file: Buffer, limit: number): boolean | null {
+  const from = Math.max(0, file.length - 22 - 0xffff);
+  let end = -1;
+  for (let i = file.length - 22; i >= from; i--) {
+    if (file.readUInt32LE(i) === 0x06054b50) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return null;
+  const entries = file.readUInt16LE(end + 10);
+  let offset = file.readUInt32LE(end + 16);
+  let left = limit;
+  for (let n = 0; n < entries; n++) {
+    if (offset + 46 > file.length || file.readUInt32LE(offset) !== 0x02014b50) {
+      return null;
+    }
+    const method = file.readUInt16LE(offset + 10);
+    const compressed = file.readUInt32LE(offset + 20);
+    const local = file.readUInt32LE(offset + 42);
+    if (compressed === 0xffffffff || local + 30 > file.length) return null;
+    if (file.readUInt32LE(local) !== 0x04034b50) return null;
+    const start =
+      local +
+      30 +
+      file.readUInt16LE(local + 26) +
+      file.readUInt16LE(local + 28);
+    if (start + compressed > file.length) return null;
+    const data = file.subarray(start, start + compressed);
+    if (method === 0) {
+      left -= compressed;
+    } else if (method === 8) {
+      try {
+        left -= inflateRawSync(data, { maxOutputLength: left + 1 }).length;
+      } catch (error) {
+        // Over the cap, or not deflate data at all
+        if ((error as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE') {
+          return false;
+        }
+        return null;
+      }
+    } else {
+      return null;
+    }
+    if (left < 0) return false;
+    offset +=
+      46 +
+      file.readUInt16LE(offset + 28) +
+      file.readUInt16LE(offset + 30) +
+      file.readUInt16LE(offset + 32);
+  }
+  return true;
+}
+
 /** The first sheet of an .xlsx workbook as rows of text (empty rows left out) */
 export async function readProductSheet(file: Buffer): Promise<string[][]> {
   const unpacked = zipUnpackedSize(file);
   if (unpacked === null) {
     throw new CsvFormatError('Could not read the Excel file');
   }
-  if (unpacked > MAX_XLSX_UNPACKED_BYTES) {
+  // What it declares, then what it really unpacks to (a declared size can lie)
+  const fits =
+    unpacked <= MAX_XLSX_UNPACKED_BYTES
+      ? zipFitsWithin(file, MAX_XLSX_UNPACKED_BYTES)
+      : false;
+  if (fits === null) {
+    throw new CsvFormatError('Could not read the Excel file');
+  }
+  if (!fits) {
     throw new CsvFormatError(
       'The Excel file is too large. Split it into smaller files.',
     );

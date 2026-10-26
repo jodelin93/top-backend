@@ -60,8 +60,8 @@ export class HardwareController {
   /** GET /hardware/jodaprint — is the JodaPrint agent set up, and for which organization */
   @Get('jodaprint')
   @AnyMember()
-  jodaPrintConfig() {
-    return this.jodaPrint.publicConfig();
+  jodaPrintConfig(@CurrentUser() user: AuthUser) {
+    return this.jodaPrint.publicConfig(user.tenantId);
   }
 
   /**
@@ -74,7 +74,7 @@ export class HardwareController {
   @Header('Cache-Control', 'no-store')
   @AnyMember()
   jodaPrintSign(@CurrentUser() user: AuthUser, @Body() dto: JodaPrintSignDto) {
-    return this.jodaPrint.sign(dto, user.permissions);
+    return this.jodaPrint.sign(dto, user.permissions, user.tenantId);
   }
 
   /** GET /hardware/status — every till's last report */

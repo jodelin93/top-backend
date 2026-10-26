@@ -201,6 +201,19 @@ describe('Branch-level access (e2e, AC15)', () => {
         expect(r.status).toBeLessThan(300);
       }
 
+      // Selling needs an open cash session on the register (the store default);
+      // branch A's drawer is shared: the owner and the branch-A manager sell there
+      const sharedA = await api('patch', `/registers/${branchA.registerId}`, {
+        drawerPolicy: 'shared',
+      });
+      expect(sharedA.status).toBe(200);
+      for (const registerId of [branchA.registerId, branchB.registerId]) {
+        const shift = await api('post', '/shifts/open', {
+          registerId,
+          openingFloat: 100,
+        });
+        expect(shift.status).toBeLessThan(300);
+      }
       const a = await sellAt(branchA.registerId, ownerToken, 'sale-a');
       expect(a.status).toBe(201);
       saleA = a.body;
@@ -409,6 +422,25 @@ describe('Branch-level access (e2e, AC15)', () => {
         items: [{ variantId, quantity: 0 }],
       });
       expect(r.status).toBe(404);
+    });
+  });
+
+  describe('store-wide settings', () => {
+    it("a branch-limited manager can't change them (settings, payment methods, taxes)", async () => {
+      const settings = await asStaff('patch', '/settings', { receiptFooter: 'x' });
+      expect(settings.status).toBe(403);
+      const method = await asStaff('post', '/payment-methods', {
+        code: `E2E${Date.now() % 100000}`,
+        name: { en: 'E2E' },
+        methodType: 'other',
+      });
+      expect(method.status).toBe(403);
+      const tax = await asStaff('post', '/tax-rates', {
+        code: `T${Date.now() % 100000}`,
+        name: { en: 'E2E tax' },
+        rate: 5,
+      });
+      expect(tax.status).toBe(403);
     });
   });
 

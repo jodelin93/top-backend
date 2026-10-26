@@ -1,6 +1,7 @@
 import './pg-types';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import * as dotenv from 'dotenv';
+import { dbSsl } from './db-ssl';
 import { join } from 'path';
 
 // Load environment variables
@@ -17,7 +18,7 @@ export const dataSourceOptions: DataSourceOptions = {
   migrations: [join(__dirname, 'migrations', '*{.ts,.js}')],
   synchronize: false, // Never use synchronize in production
   logging: process.env.DB_LOGGING === 'true',
-  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  ssl: dbSsl(process.env),
 };
 
 const dataSource = new DataSource(dataSourceOptions);

@@ -40,6 +40,21 @@ describe('JodaPrintService', () => {
     });
   });
 
+  it('signs only for the stores this organization belongs to, when they are listed', async () => {
+    const s = service({ ...CONFIGURED, JODAPRINT_TENANT_IDS: 't1, t2' });
+    expect(s.publicConfig('t1')).toEqual({ enabled: true, orgId: 'org_1' });
+    expect(s.publicConfig('t3')).toEqual({ enabled: false, orgId: null });
+    await expect(s.sign({ method: 'print' }, cashier, 't2')).resolves.toEqual(
+      signature,
+    );
+    await expect(s.sign({ method: 'print' }, cashier, 't3')).rejects.toThrow(
+      NotFoundException,
+    );
+    await expect(s.sign({ method: 'print' }, cashier, null)).rejects.toThrow(
+      NotFoundException,
+    );
+  });
+
   it('signs a print request for its own organization', async () => {
     const s = service(CONFIGURED);
     const params = { type: 'escpos', data: 'AA==' };

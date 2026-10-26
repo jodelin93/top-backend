@@ -206,14 +206,23 @@ class SmtpConversation {
     });
   }
 
-  async command(line: string | null, expect: number[]): Promise<SmtpReply> {
+  /**
+   * Send one line and wait for its reply. `label` names the step in an error
+   * instead of the line itself: a line that is a secret (the AUTH LOGIN user
+   * and password, sent alone) never reaches the logs.
+   */
+  async command(
+    line: string | null,
+    expect: number[],
+    label?: string,
+  ): Promise<SmtpReply> {
     const reply = this.read();
     if (line !== null) this.socket.write(`${line}\r\n`);
     const result = await reply;
     if (!expect.includes(result.code)) {
       throw new Error(
         // The server's reply may quote the recipient: masked, as it ends up in logs
-        `SMTP ${line?.split(' ')[0] ?? 'greeting'} failed: ${result.code} ${maskEmailsIn(result.lines.join(' '))}`,
+        `SMTP ${label ?? line?.split(' ')[0] ?? 'greeting'} failed: ${result.code} ${maskEmailsIn(result.lines.join(' '))}`,
       );
     }
     return result;
@@ -262,16 +271,18 @@ export class SmtpEmailChannel implements EmailChannel {
           const token = Buffer.from(
             `\0${this.config.user}\0${this.config.password ?? ''}`,
           ).toString('base64');
-          await smtp.command(`AUTH PLAIN ${token}`, [235]);
+          await smtp.command(`AUTH PLAIN ${token}`, [235], 'AUTH PLAIN');
         } else {
           await smtp.command('AUTH LOGIN', [334]);
           await smtp.command(
             Buffer.from(this.config.user).toString('base64'),
             [334],
+            'AUTH LOGIN (user)',
           );
           await smtp.command(
             Buffer.from(this.config.password ?? '').toString('base64'),
             [235],
+            'AUTH LOGIN (password)',
           );
         }
       }
