@@ -12,6 +12,7 @@
  *   npm run seed:demo                         # seeds the store of admin@test.com
  *   npm run seed:demo -- --reset              # wipes that store's data first
  *   OWNER_EMAIL=x@y.com OWNER_PASSWORD=... npm run seed:demo
+ *   DEMO_STAFF_DOMAIN=other.test   # staff e-mails of a second demo store
  *
  * Refuses to run in production, against a remote API or a database whose name doesn't say
  * dev/test/demo/local (SEED_DEMO_ANYWHERE=1 overrides), and on a store that already has
@@ -25,6 +26,9 @@ const API = process.env.API_URL ?? `http://localhost:${process.env.PORT ?? 3000}
 const OWNER_EMAIL = (process.env.OWNER_EMAIL ?? 'admin@test.com').toLowerCase();
 const OWNER_PASSWORD = process.env.OWNER_PASSWORD ?? process.env.ADMIN_PASSWORD ?? 'Password123!';
 const STAFF_PASSWORD = process.env.DEMO_PASSWORD ?? 'Demo1234!';
+// Staff e-mails end with this domain: a second demo store in the same database needs
+// its own (the same e-mail would sign in to the first store)
+const STAFF_DOMAIN = process.env.DEMO_STAFF_DOMAIN ?? 'test.com';
 const RESET = process.argv.includes('--reset');
 const HISTORY_DAYS = 60;
 const DAY = 86_400_000;
@@ -172,12 +176,12 @@ async function reconnect() {
 
 // ---------- demo content ----------
 const STAFF = [
-  { key: 'admin', email: 'sophie.admin@test.com', firstName: 'Sophie', lastName: 'Laurent', role: 'admin' },
-  { key: 'manager', email: 'marc.manager@test.com', firstName: 'Marc', lastName: 'Etienne', role: 'manager' },
-  { key: 'lina', email: 'lina.cashier@test.com', firstName: 'Lina', lastName: 'Joseph', role: 'cashier' },
-  { key: 'jean', email: 'jean.cashier@test.com', firstName: 'Jean', lastName: 'Pierre', role: 'cashier' },
-  { key: 'stock', email: 'paul.stock@test.com', firstName: 'Paul', lastName: 'Desir', role: 'inventory-clerk' },
-  { key: 'accounts', email: 'nadia.accounts@test.com', firstName: 'Nadia', lastName: 'Charles', role: 'accountant' },
+  { key: 'admin', email: `sophie.admin@${STAFF_DOMAIN}`, firstName: 'Sophie', lastName: 'Laurent', role: 'admin' },
+  { key: 'manager', email: `marc.manager@${STAFF_DOMAIN}`, firstName: 'Marc', lastName: 'Etienne', role: 'manager' },
+  { key: 'lina', email: `lina.cashier@${STAFF_DOMAIN}`, firstName: 'Lina', lastName: 'Joseph', role: 'cashier' },
+  { key: 'jean', email: `jean.cashier@${STAFF_DOMAIN}`, firstName: 'Jean', lastName: 'Pierre', role: 'cashier' },
+  { key: 'stock', email: `paul.stock@${STAFF_DOMAIN}`, firstName: 'Paul', lastName: 'Desir', role: 'inventory-clerk' },
+  { key: 'accounts', email: `nadia.accounts@${STAFF_DOMAIN}`, firstName: 'Nadia', lastName: 'Charles', role: 'accountant' },
 ];
 
 const CUSTOM_ROLES = [
