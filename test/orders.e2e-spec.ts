@@ -246,19 +246,29 @@ describe('orders with a deposit', () => {
     expect(r.status).toBe(400);
   });
 
-  it('cancels with the deposits refunded: cash out of the session', async () => {
+  it('cancels with the deposits refunded the way each was paid', async () => {
     const r = await s.api('post', `/orders/${orderId}/cancel`, {
       reason: 'Customer changed their mind',
       deposits: 'refund',
-      refundMethodId: s.methods.CASH,
       registerId: s.registerId,
     });
     expect(r.status).toBe(200);
     expect(r.body.status).toBe('cancelled');
     expect(r.body.depositOutcome).toBe('refunded');
     expect(r.body.paidAmount).toBe(0);
+    // The cash deposit comes out of the session in cash, the card one back by card
     expect(await paidIn('order_refund')).toEqual([
-      { amount: 5_000, type: 'refund' },
+      { amount: 4_000, type: 'refund' },
+    ]);
+    const refunds = (
+      r.body.payments as { type: string; paymentMethodId: string; amount: number }[]
+    )
+      .filter((p) => p.type === 'refund')
+      .map((p) => [p.paymentMethodId, p.amount])
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+    expect(refunds).toEqual([
+      [s.methods.CASH, 4_000],
+      [s.methods.CARD, 1_000],
     ]);
     // Nothing more on a cancelled order
     const more = await s.api('post', `/orders/${orderId}/deposits`, {
@@ -308,5 +318,28 @@ describe('orders with a deposit', () => {
     const rows = r.body.rows as { received: number; refunded: number }[];
     expect(rows.reduce((a, row) => a + Number(row.received), 0)).toBe(7_000);
     expect(rows.reduce((a, row) => a + Number(row.refunded), 0)).toBe(5_000);
+
+    // Money taken, by currency and on the dashboard: deposits when paid, less
+    // those given back (7,000 - 5,000); the voided pickup and its deposit tender
+    // count for nothing
+    const byCurrency = await s.api(
+      'get',
+      `/reports/payments-by-currency?from=${from}&to=${to}`,
+    );
+    expect(byCurrency.status).toBe(200);
+    const value = (byCurrency.body.rows as { value: number }[]).reduce(
+      (a, row) => a + Number(row.value),
+      0,
+    );
+    expect(value).toBe(2_000);
+    const summary = await s.api('get', `/reports/summary?from=${from}&to=${to}`);
+    expect(summary.status).toBe(200);
+    const tenders = summary.body.byPaymentMethod as {
+      code?: string;
+      name: string;
+      amount: number;
+    }[];
+    expect(tenders.reduce((a, row) => a + Number(row.amount), 0)).toBe(2_000);
+    expect(tenders.some((row) => /deposit paid/i.test(row.name))).toBe(false);
   });
 });

@@ -123,8 +123,9 @@ export const EXCHANGE_CREDIT_METHOD = `'EXCHANGE_CREDIT'`;
 export const ORDER_DEPOSIT_METHOD = `'ORDER_DEPOSIT'`;
 // Order deposits / refunds `op` of order `o` in the period at the selected branches
 const ORDER_PAYMENTS_IN_PERIOD = `op."tenantId" = $1 AND op.created_at >= $2 AND op.created_at <= $3 AND ${saleInBranch(B, 'o')}`;
-const NOT_EXCHANGE_CREDIT = (paymentMethodId: string) =>
-  `NOT EXISTS (SELECT 1 FROM payment_methods xm WHERE xm.id = ${paymentMethodId} AND xm.code = ${EXCHANGE_CREDIT_METHOD})`;
+// Neither exchange credit nor the deposit tender of a pickup: no money moved
+const NOT_MONEYLESS_TENDER = (paymentMethodId: string) =>
+  `NOT EXISTS (SELECT 1 FROM payment_methods xm WHERE xm.id = ${paymentMethodId} AND xm.code IN (${EXCHANGE_CREDIT_METHOD}, ${ORDER_DEPOSIT_METHOD}))`;
 // Sales filed under a closed shift after it closed (e.g. offline sales uploaded late)
 export const LATE_SALE_OF_SHIFT = `s."tenantId" = sh."tenantId" AND s."registerId" = sh."registerId"
   AND sh.status = 'closed' AND s.created_at > sh."closedAt" AND ${SOLD}
@@ -566,14 +567,29 @@ export const REPORTS: ReportDefinition[] = [
     // currency, so values in different currencies are never added together
     sql: `
       WITH paid AS (
-        SELECT TRIM(COALESCE(p."tenderedCurrency", p."currencyCode", s."currencyCode")) AS tendered,
-               TRIM(s."currencyCode") AS currency,
-               COUNT(*) AS count,
-               SUM(COALESCE(p."tenderedAmount", p.amount)) AS "tenderedAmount",
-               SUM(p.amount) AS value,
-               AVG(p."exchangeRate") AS rate
-        FROM payments p JOIN sales s ON s.id = p."saleId"
-        WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} AND ${NOT_EXCHANGE_CREDIT('p."paymentMethodId"')} GROUP BY 1, 2
+        SELECT tendered, currency, SUM(count) AS count, SUM("tenderedAmount") AS "tenderedAmount",
+               SUM(value) AS value, SUM("rateSum") / NULLIF(SUM("rateCount"), 0) AS rate
+        FROM (
+          SELECT TRIM(COALESCE(p."tenderedCurrency", p."currencyCode", s."currencyCode")) AS tendered,
+                 TRIM(s."currencyCode") AS currency,
+                 COUNT(*) AS count,
+                 SUM(COALESCE(p."tenderedAmount", p.amount)) AS "tenderedAmount",
+                 SUM(p.amount) AS value,
+                 SUM(p."exchangeRate") AS "rateSum", COUNT(p."exchangeRate") AS "rateCount"
+          FROM payments p JOIN sales s ON s.id = p."saleId"
+          WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} AND ${NOT_MONEYLESS_TENDER('p."paymentMethodId"')} GROUP BY 1, 2
+          UNION ALL
+          -- Order deposits: money received when paid, in the currency handed over
+          -- (less deposits given back); the pickup's deposit tender is left out above
+          SELECT TRIM(COALESCE(op."tenderedCurrency", o."currencyCode")), TRIM(o."currencyCode"),
+                 COUNT(*) FILTER (WHERE op.type = 'deposit'),
+                 SUM(CASE WHEN op.type = 'deposit' THEN 1 ELSE -1 END * COALESCE(op."tenderedAmount", op.amount)),
+                 SUM(CASE WHEN op.type = 'deposit' THEN op.amount ELSE 0 - op.amount END),
+                 SUM(op."exchangeRate") FILTER (WHERE op.type = 'deposit'),
+                 COUNT(op."exchangeRate") FILTER (WHERE op.type = 'deposit')
+          FROM customer_order_payments op JOIN customer_orders o ON o.id = op."orderId"
+          WHERE ${ORDER_PAYMENTS_IN_PERIOD} GROUP BY 1, 2
+        ) t GROUP BY 1, 2
       ), change AS (
         SELECT TRIM(COALESCE(s.metadata->'changeTender'->>'currencyCode', s."currencyCode")) AS tendered,
                TRIM(s."currencyCode") AS currency,

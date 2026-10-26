@@ -303,6 +303,15 @@ export class SyncPushService {
     const lease = op.lease
       ? verifyLease(op.lease, getOfflineLeaseSecret(this.configService))
       : null;
+    // Offline semantics (no store rules, no approvals: the sale already
+    // happened) only under a valid lease of this store (decision S02). Without
+    // one, the sale waits for a manager instead of being applied; a manager's
+    // import (devices.manage) is the way to apply it
+    if (!options.importedBy) {
+      if (!lease) return review('lease_missing');
+      if (!lease.ok) return review('lease_invalid');
+      if (lease.claims.tid !== tenantId) return review('lease_wrong_tenant');
+    }
     // Without a batch device, the payload's device only when its lease names it
     const deviceId =
       batchDeviceId ??

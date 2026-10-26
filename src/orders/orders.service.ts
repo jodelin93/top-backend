@@ -391,21 +391,13 @@ export class OrdersService {
     dto: CancelOrderDto,
   ) {
     const approverId = requestContext.get()?.approverId ?? null;
-    const current = await findVisibleOrder(
-      this.dataSource.manager,
-      tenantId,
-      id,
-    );
-    const refunding =
-      dto.deposits === 'refund' && Number(current.paidAmount) > 0;
-    if (refunding && !dto.refundMethodId) {
-      throw new BadRequestException(
-        'Choose how the deposits are given back to the customer',
-      );
-    }
-    const method = refunding
-      ? await this.validateMethod(tenantId, dto.refundMethodId!, dto.reference)
-      : null;
+    // Not found (or another branch's) before anything else
+    await findVisibleOrder(this.dataSource.manager, tenantId, id);
+    // Only for a deposit whose way of paying can no longer be used
+    const fallback =
+      dto.deposits === 'refund' && dto.refundMethodId
+        ? await this.validateMethod(tenantId, dto.refundMethodId, dto.reference)
+        : null;
 
     await this.dataSource.transaction(async (manager) => {
       const order = await findVisibleOrder(manager, tenantId, id, {
@@ -415,19 +407,24 @@ export class OrdersService {
       const paid = round2(Number(order.paidAmount));
       let outcome: DepositOutcome = 'none';
       if (paid > 0 && dto.deposits === 'refund') {
-        await this.postPayment(manager, order, user, {
-          type: CustomerOrderPaymentType.REFUND,
-          payment: {
-            method: method!,
-            isCash: method!.methodType === PaymentMethodType.CASH,
-            amount: paid,
-            reference: dto.reference?.trim() || null,
-            tendered: null,
-          },
-          registerId: dto.registerId,
-          approverId,
-          note: dto.reason.trim(),
-        });
+        // Given back the way each deposit was paid: per method, and in the
+        // currency it was handed over in (read under the order's lock)
+        const parts = await this.refundParts(
+          manager,
+          order,
+          paid,
+          fallback,
+          dto.reference,
+        );
+        for (const payment of parts) {
+          await this.postPayment(manager, order, user, {
+            type: CustomerOrderPaymentType.REFUND,
+            payment,
+            registerId: dto.registerId,
+            approverId,
+            note: dto.reason.trim(),
+          });
+        }
         outcome = 'refunded';
       } else if (paid > 0) {
         outcome = 'kept';
@@ -692,6 +689,101 @@ export class OrdersService {
       reference: input.reference?.trim() || null,
       tendered,
     };
+  }
+
+  /**
+   * What a cancelled order gives back: the net of its deposits per way of
+   * paying (method and currency handed over), each refunded through that same
+   * method and in that currency. A method that can no longer be used (turned
+   * off since) needs the fallback the person chose.
+   */
+  private async refundParts(
+    manager: EntityManager,
+    order: CustomerOrder,
+    paid: number,
+    fallback: PaymentMethod | null,
+    reference?: string,
+  ): Promise<ValidatedOrderPayment[]> {
+    const rows = await manager
+      .getRepository(CustomerOrderPayment)
+      .createQueryBuilder('p')
+      .select('p.paymentMethodId', 'methodId')
+      .addSelect('p.tenderedCurrency', 'currency')
+      .addSelect(
+        `SUM(CASE WHEN "p"."type" = :deposit THEN "p"."amount" ELSE 0 - "p"."amount" END)`,
+        'amount',
+      )
+      .addSelect(
+        `SUM(CASE WHEN "p"."type" = :deposit THEN "p"."tenderedAmount" ELSE 0 - "p"."tenderedAmount" END)`,
+        'tendered',
+      )
+      .where('p.tenantId = :tenantId AND p.orderId = :orderId', {
+        tenantId: order.tenantId,
+        orderId: order.id,
+        deposit: CustomerOrderPaymentType.DEPOSIT,
+      })
+      .groupBy('p.paymentMethodId')
+      .addGroupBy('p.tenderedCurrency')
+      .getRawMany<{
+        methodId: string;
+        currency: string | null;
+        amount: string;
+        tendered: string | null;
+      }>();
+    const owed = rows
+      .map((r) => ({
+        ...r,
+        amount: round2(Number(r.amount)),
+        tendered: r.tendered === null ? null : round2(Number(r.tendered)),
+      }))
+      .filter((r) => r.amount > 0.005);
+    const total = round2(owed.reduce((sum, r) => sum + r.amount, 0));
+    if (Math.abs(total - paid) > 0.005) {
+      throw new ConflictException(
+        "The order's deposits do not add up: reload the order and try again",
+      );
+    }
+    const methods = await manager.getRepository(PaymentMethod).find({
+      where: {
+        tenantId: order.tenantId,
+        id: In(owed.map((r) => r.methodId)),
+      },
+    });
+    return owed.map((part) => {
+      const original = methods.find((m) => m.id === part.methodId);
+      const usable =
+        original &&
+        original.status === PaymentMethodStatus.ACTIVE &&
+        PAYABLE_TYPES.includes(original.methodType);
+      const method = usable ? original : fallback;
+      if (!method) {
+        throw new BadRequestException(
+          `${original?.name?.en ?? original?.code ?? 'A payment method'} can no longer be used: choose how to give that deposit back`,
+        );
+      }
+      const isCash = method.methodType === PaymentMethodType.CASH;
+      if (!isCash && method.requiresReference && !reference?.trim()) {
+        throw new BadRequestException(
+          `Enter the reference of the refund (${method.name?.en ?? method.code})`,
+        );
+      }
+      // Cash handed over in another currency comes back in that currency
+      const foreign =
+        usable && part.currency && part.tendered && part.tendered > 0
+          ? {
+              currencyCode: part.currency,
+              amount: part.tendered,
+              rate: Math.round((part.amount / part.tendered) * 1e6) / 1e6,
+            }
+          : null;
+      return {
+        method,
+        isCash,
+        amount: part.amount,
+        reference: isCash ? null : reference?.trim() || null,
+        tendered: foreign,
+      };
+    });
   }
 
   /**

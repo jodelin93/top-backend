@@ -55,6 +55,6 @@ describe('ReportsService.summary: gift cards and exchange credit', () => {
       to: '2026-09-30T23:59:59Z',
     });
     const tenderSql = sqls.find((sql) => sql.includes('"methodType"'));
-    expect(tenderSql).toContain("pm.code <> 'EXCHANGE_CREDIT'");
+    expect(tenderSql).toContain("pm.code NOT IN ('EXCHANGE_CREDIT', 'ORDER_DEPOSIT')");
   });
 });

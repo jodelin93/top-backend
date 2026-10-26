@@ -5,6 +5,7 @@ import { ReportQueryDto } from './reports.dto';
 import {
   ELIGIBLE_RETURN,
   EXCHANGE_CREDIT_METHOD,
+  ORDER_DEPOSIT_METHOD,
   LINE_GROSS_EX_TAX,
   REVENUE_LINE,
   STORED_VALUE_LINE,
@@ -232,15 +233,29 @@ export class ReportsService {
     );
 
     // Tender mix per currency: payments are in their sale's currency. Exchange
-    // credit (returned goods paying for their replacement) moves no money: left out
+    // credit (returned goods paying for their replacement) and the deposit tender
+    // of a pickup move no money: left out. Order deposits count when they are
+    // paid (less those given back), like Payments by method
     const byPaymentMethod = await q<ByPaymentMethodRow[]>(
       `SELECT pm.id AS "paymentMethodId", pm.name->>'en' AS "name", pm."methodType" AS "methodType",
-              TRIM(s."currencyCode") AS "currencyCode", COUNT(*) AS "count", SUM(p.amount) AS "amount"
-       FROM payments p
-       JOIN sales s ON s.id = p."saleId"
-       JOIN payment_methods pm ON pm.id = p."paymentMethodId"
-       WHERE ${completed} AND p.status IN (${PAID_STATUSES}) AND pm.code <> ${EXCHANGE_CREDIT_METHOD}
-       GROUP BY pm.id, TRIM(s."currencyCode") ORDER BY "amount" DESC`,
+              t.currency AS "currencyCode", SUM(t.count) AS "count", SUM(t.amount) AS "amount"
+       FROM (
+         SELECT p."paymentMethodId" AS method, TRIM(s."currencyCode") AS currency,
+                COUNT(*) AS count, SUM(p.amount) AS amount
+         FROM payments p JOIN sales s ON s.id = p."saleId"
+         WHERE ${completed} AND p.status IN (${PAID_STATUSES})
+         GROUP BY 1, 2
+         UNION ALL
+         SELECT op."paymentMethodId", TRIM(o."currencyCode"),
+                COUNT(*) FILTER (WHERE op.type = 'deposit'),
+                SUM(CASE WHEN op.type = 'deposit' THEN op.amount ELSE 0 - op.amount END)
+         FROM customer_order_payments op JOIN customer_orders o ON o.id = op."orderId"
+         WHERE op."tenantId" = $1 AND op.created_at >= $2 AND op.created_at <= $3 AND ${saleInBranch('$6', 'o')}
+         GROUP BY 1, 2
+       ) t
+       JOIN payment_methods pm ON pm.id = t.method
+       WHERE pm.code NOT IN (${EXCHANGE_CREDIT_METHOD}, ${ORDER_DEPOSIT_METHOD})
+       GROUP BY pm.id, t.currency ORDER BY "amount" DESC`,
     );
     const changeRows = await q<{ currencyCode: string; change: DbNumber }[]>(
       `SELECT TRIM(s."currencyCode") AS "currencyCode", COALESCE(SUM(s."changeAmount"), 0) AS "change"

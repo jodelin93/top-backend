@@ -371,12 +371,15 @@ describe('SyncPushService', () => {
         op('c', 3, { lease: undefined }),
       ],
     });
-    expect(results.map((r) => [r.status, r.leaseIssues])).toEqual([
+    // A lease of this store that ran out: recorded and flagged. No lease, or a
+    // forged one: not applied at all (no offline semantics without a lease)
+    expect(results.map((r) => [r.status, r.leaseIssues ?? r.reason])).toEqual([
       ['accepted', ['captured_after_lease']],
-      ['accepted', ['lease_invalid']],
-      ['accepted', ['lease_missing']],
+      ['needs_review', 'lease_invalid'],
+      ['needs_review', 'lease_missing'],
     ]);
-    expect(cases).toHaveLength(3);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(cases).toHaveLength(1);
     expect(cases[0]).toMatchObject({
       type: 'offline_lease',
       saleId: 'sale-a',
@@ -456,20 +459,38 @@ describe('SyncPushService', () => {
         role: 'manager',
         user: { status: 'active' } as TenantMembership['user'],
       });
-      await service.push('t1', user, {
+      const { results } = await service.push('t1', user, {
         operations: [
           // The uploader's own lease, a manager named as the cashier
           op('a', 1, { actorId: CASHIER }),
           op('b', 2, { actorId: CASHIER, lease: undefined }),
         ],
       });
-      for (const call of [0, 1]) {
-        expect(actingUserOf(call)).toMatchObject({
-          id: USER,
-          permissions: ['pos.sell'],
-          note: expect.stringContaining('no lease') as string,
-        });
-      }
+      expect(actingUserOf(0)).toMatchObject({
+        id: USER,
+        permissions: ['pos.sell'],
+        note: expect.stringContaining('no lease') as string,
+      });
+      // Without any lease the sale is not applied: it waits for a manager
+      expect(results[1]).toMatchObject({
+        status: 'needs_review',
+        reason: 'lease_missing',
+      });
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it("applies a sale without a lease only through a manager's import", async () => {
+      const { results } = await service.push(
+        't1',
+        user,
+        { operations: [op('a', 1, { lease: undefined })] },
+        { importedBy: USER },
+      );
+      expect(results[0]).toMatchObject({
+        status: 'accepted',
+        leaseIssues: ['lease_missing'],
+      });
+      expect(create).toHaveBeenCalledTimes(1);
     });
 
     it('falls back to the uploader with a note when the cashier is not an active member', async () => {
