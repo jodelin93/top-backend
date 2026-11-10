@@ -392,6 +392,75 @@ describe('POS API (e2e)', () => {
       expect(r.body.items[0]).toMatchObject({ before: 5, after: 4 });
       expect(r.body.adjustmentNumber).toMatch(/^ADJ-\d{6}$/);
     });
+
+    it('keeps damaged goods at the receiving location unless the store keeps them apart', async () => {
+      const r = await api('post', '/inventory/receive', {
+        locationId,
+        items: [{ variantId: coffee, quantity: 1, condition: 'damaged' }],
+      });
+      expect(r.status).toBeLessThan(300);
+      expect(await stockOf('COF')).toBe(11);
+      const locations = await api('get', '/locations');
+      expect(
+        (locations.body as { stockStatus: string }[]).filter(
+          (l) => l.stockStatus === 'damaged',
+        ),
+      ).toHaveLength(0);
+      // Back to 10 for the sales below
+      await api('post', '/inventory/adjustments', {
+        locationId,
+        reason: 'recount',
+        mode: 'set',
+        items: [{ variantId: coffee, quantity: 10 }],
+      });
+      expect(await stockOf('COF')).toBe(10);
+    });
+
+    it('lists a quarantine location with only what is there', async () => {
+      const locations = await api('get', '/locations');
+      const { warehouseId } = (
+        locations.body as { id: string; warehouseId: string }[]
+      ).find((l) => l.id === locationId)!;
+      const q = await api('post', '/locations', {
+        warehouseId,
+        code: 'QUAR',
+        name: 'Quarantine',
+        stockStatus: 'quarantine',
+      });
+      expect(q.status).toBe(201);
+      const listed = () =>
+        api('get', `/inventory/stock?locationId=${q.body.id}`).then(
+          (res) => res.body as { sku: string; quantityOnHand: number }[],
+        );
+      expect(await listed()).toEqual([]);
+
+      await api('patch', '/settings', { keepDamagedApart: true });
+      const r = await api('post', '/inventory/receive', {
+        locationId,
+        items: [{ variantId: coffee, quantity: 1, condition: 'damaged' }],
+      });
+      expect(r.status).toBeLessThan(300);
+      expect(await stockOf('COF')).toBe(10);
+      expect(await listed()).toEqual([
+        expect.objectContaining({ quantityOnHand: 1 }),
+      ]);
+      // Low stock is about sellable stock only
+      const low = await api('get', '/inventory/stock?lowStock=true');
+      expect(
+        (low.body as { locationId: string }[]).some(
+          (row) => row.locationId === q.body.id,
+        ),
+      ).toBe(false);
+
+      await api('post', '/inventory/adjustments', {
+        locationId: q.body.id,
+        reason: 'damage',
+        mode: 'set',
+        items: [{ variantId: coffee, quantity: 0 }],
+      });
+      await api('patch', '/settings', { keepDamagedApart: false });
+      expect(await listed()).toEqual([]);
+    });
   });
 
   describe('customers and discounts', () => {

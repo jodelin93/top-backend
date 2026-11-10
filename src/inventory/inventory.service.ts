@@ -955,6 +955,12 @@ export class InventoryService {
         transit: LocationStockStatus.TRANSIT,
       });
     }
+    // Every product is listed at every sellable location (0 when none); the
+    // other locations (quarantine, damaged, transit) only list what is there
+    qb.andWhere(
+      '(location.stockStatus = :listAll OR COALESCE(level.quantityOnHand, 0) <> 0 OR COALESCE(level.quantityInTransit, 0) <> 0)',
+      { listAll: LocationStockStatus.SELLABLE },
+    );
     // Branch-limited users: the locations of their branches' warehouses (spec §9)
     const scope = locationFilterSql('"location"."id"');
     if (scope) qb.andWhere(scope.sql, scope.params);
@@ -976,10 +982,12 @@ export class InventoryService {
     if (query.lowStock) {
       const { lowStockThreshold } =
         await this.settingsService.getSettings(tenantId);
+      // Low stock is about what can be sold: sellable locations only
       qb.andWhere(
-        'COALESCE(level.quantityOnHand, 0) <= COALESCE(product.reorderPoint, :threshold)',
+        'location.stockStatus = :lowSellable AND COALESCE(level.quantityOnHand, 0) <= COALESCE(product.reorderPoint, :threshold)',
         {
           threshold: lowStockThreshold,
+          lowSellable: LocationStockStatus.SELLABLE,
         },
       );
     }
