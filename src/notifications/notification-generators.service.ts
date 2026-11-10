@@ -64,8 +64,10 @@ export async function findLowStock(
        FROM stock_levels sl
        JOIN product_variants v ON v.id = sl."variantId"
        JOIN products p ON p.id = v."productId"
-       LEFT JOIN inventory_locations l ON l.id = sl."locationId"
+       JOIN inventory_locations l ON l.id = sl."locationId"
       WHERE sl."tenantId" = $1
+        -- Low stock is about what can be sold (not quarantine / damaged / transit)
+        AND l."stockStatus" = 'sellable'
         AND v.status = 'active'
         AND p."isStockTracked"
         AND COALESCE(NULLIF(v."minStockLevel", 0), $2::numeric) > 0

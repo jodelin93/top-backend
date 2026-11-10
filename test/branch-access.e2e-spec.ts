@@ -184,6 +184,35 @@ describe('Branch-level access (e2e, AC15)', () => {
       });
     });
 
+    it('lists a product sold at branch B only at locations it is sold or kept', async () => {
+      const sku = `ONLYB-${RUN}`.slice(0, 50);
+      const product = await api('post', '/products', {
+        sku,
+        name: { en: 'Branch B item' },
+        price: 10,
+        branchIds: [branchB.id],
+      });
+      expect(product.status).toBe(201);
+      const listed = (locationId: string) =>
+        api(
+          'get',
+          `/inventory/stock?locationId=${locationId}&search=${sku}`,
+        ).then((res) => res.body as { quantityOnHand: number }[]);
+      expect(await listed(branchA.locationId)).toEqual([]);
+      expect(await listed(branchB.locationId)).toEqual([
+        expect.objectContaining({ quantityOnHand: 0 }),
+      ]);
+      // Stock kept at branch A is listed there all the same
+      const r = await api('post', '/inventory/receive', {
+        locationId: branchA.locationId,
+        items: [{ variantId: product.body.variants[0].id, quantity: 1 }],
+      });
+      expect(r.status).toBeLessThan(300);
+      expect(await listed(branchA.locationId)).toEqual([
+        expect.objectContaining({ quantityOnHand: 1 }),
+      ]);
+    });
+
     it('stocks a product at both branches and sells once at each', async () => {
       const product = await api('post', '/products', {
         sku: `BR-${RUN}`.slice(0, 50),

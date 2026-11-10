@@ -39,6 +39,7 @@ import {
   branchLocationIdsSql,
   locationFilterSql,
   scopedBranchIds,
+  servedWarehousesSql,
 } from '../auth/branch-scope';
 import { hiddenFieldsFor } from '../auth/sensitive-fields';
 import { nextDocumentNumber } from '../common/utils/sequence';
@@ -955,10 +956,18 @@ export class InventoryService {
         transit: LocationStockStatus.TRANSIT,
       });
     }
-    // Every product is listed at every sellable location (0 when none); the
-    // other locations (quarantine, damaged, transit) only list what is there
+    // A location lists what it holds. A sellable location also lists, at 0,
+    // the products sold at a branch its warehouse serves (branch assortment;
+    // no assortment = every branch, a warehouse serving no branch = all)
     qb.andWhere(
-      '(location.stockStatus = :listAll OR COALESCE(level.quantityOnHand, 0) <> 0 OR COALESCE(level.quantityInTransit, 0) <> 0)',
+      `(COALESCE(level.quantityOnHand, 0) <> 0 OR COALESCE(level.quantityInTransit, 0) <> 0
+        OR (location.stockStatus = :listAll AND (
+          NOT EXISTS (SELECT 1 FROM product_branches pb WHERE pb."productId" = "product"."id")
+          OR NOT EXISTS (SELECT 1 FROM ${servedWarehousesSql(':tenantId')} sw
+                         WHERE sw."warehouseId" = "location"."warehouseId")
+          OR EXISTS (SELECT 1 FROM product_branches pb
+                     JOIN ${servedWarehousesSql(':tenantId')} sw ON sw."branchId" = pb."branchId"
+                     WHERE pb."productId" = "product"."id" AND sw."warehouseId" = "location"."warehouseId"))))`,
       { listAll: LocationStockStatus.SELLABLE },
     );
     // Branch-limited users: the locations of their branches' warehouses (spec §9)

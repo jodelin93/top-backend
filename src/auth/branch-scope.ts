@@ -140,6 +140,18 @@ export const branchWarehouseIdsSql = (p: string, tenant: string) =>
      WHERE rb."tenantId" = ${tenant} AND rb."branchId" = ANY(${p}::uuid[]))`;
 
 /**
+ * SQL (subquery) of the (branchId, warehouseId) pairs: the warehouses assigned
+ * to each branch plus those its registers sell from
+ */
+export const servedWarehousesSql = (tenant: string) =>
+  `(SELECT bw."branchId", bw."warehouseId" FROM branch_warehouses bw
+     WHERE bw."tenantId" = ${tenant}
+    UNION
+    SELECT rb."branchId", rl."warehouseId" FROM registers rb
+      JOIN inventory_locations rl ON rl.id = rb."defaultLocationId"
+     WHERE rb."tenantId" = ${tenant} AND rb."branchId" IS NOT NULL)`;
+
+/**
  * Query builder condition limiting a location id expression (SQL, e.g.
  * '"level"."locationId"') to the scope's locations, or null when unrestricted.
  * `tenantParam` names the query's tenant parameter.
