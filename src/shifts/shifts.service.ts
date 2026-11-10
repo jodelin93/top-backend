@@ -112,6 +112,8 @@ export interface RecordCashMovementInput {
 export interface PaymentMethodTotal {
   paymentMethodId: string;
   name: string;
+  // e.g. EXCHANGE_CREDIT: the returned goods' value paying an exchange (not money)
+  code?: string;
   methodType: string;
   count: number;
   amount: number;
@@ -129,6 +131,14 @@ export interface ShiftSalesSummary {
   orderDeposits: {
     received: number;
     refunded: number;
+    byPaymentMethod: PaymentMethodTotal[];
+  };
+  // Returns made in this session (of any day's sale) and how they were refunded;
+  // EXCHANGE_CREDIT is the part that paid an exchange's new items. Absent from
+  // summaries frozen before it existed.
+  returns?: {
+    count: number;
+    total: number;
     byPaymentMethod: PaymentMethodTotal[];
   };
 }
@@ -2007,6 +2017,49 @@ export class ShiftsService {
        ORDER BY amount DESC`,
       [shift.tenantId, shift.id],
     );
+    // Returns made here; a failed card refund paid nothing back
+    const [returned] = await manager.query<
+      { count: string; total: string | null }[]
+    >(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(r.total), 0) AS total
+       FROM sale_returns r WHERE r."tenantId" = $1 AND r."shiftId" = $2`,
+      [shift.tenantId, shift.id],
+    );
+    const refundsByMethod = await manager.query<
+      {
+        id: string;
+        name: string | null;
+        code: string;
+        methodType: string;
+        count: string;
+        amount: string | number;
+      }[]
+    >(
+      `SELECT pm.id, pm.name->>'en' AS name, pm.code, pm."methodType",
+              COUNT(DISTINCT rf."returnId") AS count, COALESCE(SUM(rf.amount), 0) AS amount
+       FROM sale_return_refunds rf
+       JOIN sale_returns r ON r.id = rf."returnId"
+       JOIN payment_methods pm ON pm.id = rf."paymentMethodId"
+       WHERE r."tenantId" = $1 AND r."shiftId" = $2 AND rf.status::text <> 'failed'
+       GROUP BY pm.id, pm.name, pm.code, pm."methodType"
+       ORDER BY amount DESC`,
+      [shift.tenantId, shift.id],
+    );
+    const methodTotal = (row: {
+      id: string;
+      name: string | null;
+      code: string;
+      methodType: string;
+      count: string;
+      amount: string | number;
+    }): PaymentMethodTotal => ({
+      paymentMethodId: row.id,
+      name: row.name ?? row.code,
+      code: row.code,
+      methodType: row.methodType,
+      count: Number(row.count),
+      amount: round2(Number(row.amount)),
+    });
     const sumOf = (type: 'deposit' | 'refund') =>
       round2(
         deposits
@@ -2018,25 +2071,18 @@ export class ShiftsService {
       total: round2(Number(totals?.total ?? 0)),
       voidedCount: Number(voided?.count ?? 0),
       voidedTotal: round2(Number(voided?.total ?? 0)),
-      byPaymentMethod: byMethod.map((row) => ({
-        paymentMethodId: row.id,
-        name: row.name ?? row.code,
-        methodType: row.methodType,
-        count: Number(row.count),
-        amount: round2(Number(row.amount)),
-      })),
+      byPaymentMethod: byMethod.map(methodTotal),
       orderDeposits: {
         received: sumOf('deposit'),
         refunded: sumOf('refund'),
         byPaymentMethod: deposits
           .filter((row) => row.type === 'deposit')
-          .map((row) => ({
-            paymentMethodId: row.id,
-            name: row.name ?? row.code,
-            methodType: row.methodType,
-            count: Number(row.count),
-            amount: round2(Number(row.amount)),
-          })),
+          .map(methodTotal),
+      },
+      returns: {
+        count: Number(returned?.count ?? 0),
+        total: round2(Number(returned?.total ?? 0)),
+        byPaymentMethod: refundsByMethod.map(methodTotal),
       },
     };
   }
