@@ -794,11 +794,13 @@ describe('InventoryService with decimal (measured) quantities', () => {
 });
 
 describe('InventoryService.resolveConditionLocation', () => {
-  const service = () => ({
+  const service = (keepDamagedApart = true) => ({
     inventory: new InventoryService(
       {} as never,
       {} as never,
-      { getSettings: jest.fn() } as unknown as SettingsService,
+      {
+        getSettings: jest.fn(() => Promise.resolve({ keepDamagedApart })),
+      } as unknown as SettingsService,
       {} as never,
       { record: jest.fn() } as unknown as AuditService,
     ),
@@ -873,5 +875,24 @@ describe('InventoryService.resolveConditionLocation', () => {
       ),
     ).resolves.toBe('q');
     expect(saved).toHaveLength(0);
+  });
+
+  it('keeps damaged goods where they were received when the store does not keep them apart', async () => {
+    const { inventory } = service(false);
+    const { manager, saved } = managerWith([
+      { id: 'shelf', code: 'SHELF', stockStatus: 'sellable' },
+      { id: 'd', code: 'DAMAGED', stockStatus: 'damaged' },
+    ]);
+    await expect(
+      inventory.resolveConditionLocation(
+        manager as never,
+        't',
+        'shelf',
+        'damaged',
+        { createWhenMissing: true },
+      ),
+    ).resolves.toBe('shelf');
+    expect(saved).toHaveLength(0);
+    expect(manager.find).not.toHaveBeenCalled();
   });
 });

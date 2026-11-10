@@ -442,6 +442,7 @@ export class ReturnsService {
           }
         }
         // Damaged goods go to the warehouse's damaged / quarantine location
+        // (when the store keeps damaged goods apart)
         for (const line of lines) {
           if (
             line.input.disposition === ReturnDisposition.DAMAGED &&

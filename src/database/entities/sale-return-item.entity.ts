@@ -9,7 +9,8 @@ export enum ReturnDisposition {
   // Damaged / unsellable: refunded, stock unchanged
   DISPOSE = 'dispose',
   // Damaged but kept: back in stock at the warehouse's damaged / quarantine
-  // location (InventoryService.resolveConditionLocation), never sellable
+  // location when the store keeps damaged goods apart, else at the return's
+  // location (InventoryService.resolveConditionLocation)
   DAMAGED = 'damaged',
 }
 

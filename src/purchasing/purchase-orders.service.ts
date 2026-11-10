@@ -1161,7 +1161,8 @@ export class PurchaseOrdersService {
       }),
     );
 
-    // Accepted damaged units never go to sellable stock
+    // Accepted damaged units go to the damaged / quarantine location when the
+    // store keeps damaged goods apart, else to the receiving location
     const hasDamaged = input.lines.some(
       (l) => l.damagedAccepted && l.damagedQuantity > 0,
     );

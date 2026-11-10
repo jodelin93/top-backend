@@ -436,7 +436,8 @@ export class InventoryService {
 
   /**
    * Where goods in a condition go (returns, receipts): damaged goods go to the
-   * damaged / quarantine location of the same warehouse when there is one.
+   * damaged / quarantine location of the same warehouse when there is one, and
+   * only when the store keeps damaged goods apart (keepDamagedApart).
    * For the returns and purchasing flows.
    */
   async resolveConditionLocation(
@@ -447,6 +448,11 @@ export class InventoryService {
     options: { createWhenMissing?: boolean } = {},
   ): Promise<string> {
     if (condition !== 'damaged') return locationId;
+    const { keepDamagedApart } = await this.settingsService.getSettings(
+      tenantId,
+      manager,
+    );
+    if (!keepDamagedApart) return locationId;
     const location = await manager.findOne(InventoryLocation, {
       where: { tenantId, id: locationId },
       select: { id: true, warehouseId: true },

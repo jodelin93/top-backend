@@ -128,6 +128,8 @@ export class UpdateStoreSettingsDto {
   purchaseInvoiceVarianceTolerance?: number;
   // Stock count variances above this many units need inventory.count.approve
   @IsNumber() @IsOptional() @Min(0) countVarianceTolerance?: number;
+  // Damaged goods go to a damaged / quarantine location (off = they stay where received)
+  @IsBoolean() @IsOptional() keepDamagedApart?: boolean;
   // Transfers needing inventory.transfer.approve: never, above the threshold (value at cost), always
   @IsIn(['never', 'threshold', 'always']) @IsOptional() transferApprovalMode?:
     'never' | 'threshold' | 'always';

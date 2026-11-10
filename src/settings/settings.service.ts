@@ -101,6 +101,9 @@ export interface StoreSettings {
   // % a supplier invoice price may exceed the order price before it needs approval
   purchaseInvoiceVarianceTolerance: number;
   countVarianceTolerance: number;
+  // Damaged goods (receipts, returns) go to the warehouse's damaged / quarantine
+  // location; off = they stay at the location they were received at
+  keepDamagedApart: boolean;
   // Transfers needing inventory.transfer.approve before dispatch:
   // never, above transferApprovalThreshold (value at cost), or always
   transferApprovalMode: 'never' | 'threshold' | 'always';
@@ -195,6 +198,7 @@ export const DEFAULT_SETTINGS: Omit<StoreSettings, 'storeName'> = {
   purchaseOverReceiptTolerance: 0,
   purchaseInvoiceVarianceTolerance: 0,
   countVarianceTolerance: 0,
+  keepDamagedApart: false,
   transferApprovalMode: 'never',
   transferApprovalThreshold: 0,
   transferOverReceiptTolerancePercent: 0,
