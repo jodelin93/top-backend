@@ -112,6 +112,18 @@ const LINE_NET_EX_TAX = `(i.total - i."taxAmount")`;
 export const REVENUE_LINE = `COALESCE((i.metadata->>'storedValue')::boolean, false) = false`;
 export const STORED_VALUE_LINE = `COALESCE((i.metadata->>'storedValue')::boolean, false) = true`;
 /**
+ * Gift cards given back on return `r`: never in net sales, so never off them.
+ * Join it after `sale_returns r`, then read RETURN_TOTAL / RETURN_TAX (the
+ * return's total and tax net of those lines) wherever returns reduce sales.
+ */
+export const RETURNED_STORED_VALUE = `LEFT JOIN LATERAL (
+    SELECT SUM(ri.total) AS total, SUM(ri."taxAmount") AS tax
+    FROM sale_return_items ri JOIN sale_items i ON i.id = ri."saleItemId"
+    WHERE ri."returnId" = r.id AND ${STORED_VALUE_LINE}
+  ) rsv ON true`;
+export const RETURN_TOTAL = `(r.total - COALESCE(rsv.total, 0))`;
+export const RETURN_TAX = `(r."taxAmount" - COALESCE(rsv.tax, 0))`;
+/**
  * Exchange credit (returned goods paying for their replacement) is an internal,
  * non-cash tender: no money changed hands, so it is left out of the tender mix.
  */
@@ -264,8 +276,8 @@ export const REPORTS: ReportDefinition[] = [
         WHERE ${IN_PERIOD} AND ${SOLD} GROUP BY 1, 2
       ), refunded AS (
         SELECT (r.created_at AT TIME ZONE $4)::date AS day, TRIM(r."currencyCode") AS currency,
-               SUM(r.total - r."taxAmount") AS net, SUM(r."taxAmount") AS tax, SUM(r.total) AS total
-        FROM sale_returns r WHERE ${RETURNS_IN_PERIOD} GROUP BY 1, 2
+               SUM(${RETURN_TOTAL} - ${RETURN_TAX}) AS net, SUM(${RETURN_TAX}) AS tax, SUM(${RETURN_TOTAL}) AS total
+        FROM sale_returns r ${RETURNED_STORED_VALUE} WHERE ${RETURNS_IN_PERIOD} GROUP BY 1, 2
       )
       SELECT TO_CHAR(COALESCE(sold.day, refunded.day), 'YYYY-MM-DD') AS date,
              COALESCE(sold.currency, refunded.currency) AS currency,
@@ -441,6 +453,7 @@ export const REPORTS: ReportDefinition[] = [
         FROM sales s LEFT JOIN sale_items i ON i."saleId" = s.id AND ${REVENUE_LINE}
         WHERE ${IN_PERIOD} AND ${SOLD} GROUP BY 1, 2
       ), refunded AS (
+        -- Money each person handed back (gift cards included): never off their sales
         SELECT r."userId", TRIM(r."currencyCode") AS currency, SUM(r.total) AS refunds
         FROM sale_returns r WHERE ${RETURNS_IN_PERIOD} GROUP BY 1, 2
       ), voided AS (
@@ -1005,8 +1018,8 @@ export const REPORTS: ReportDefinition[] = [
         FROM sales s LEFT JOIN sale_items i ON i."saleId" = s.id AND ${REVENUE_LINE}
         WHERE ${IN_PERIOD} AND ${SOLD} AND s."salespersonId" IS NOT NULL GROUP BY 1, 2
       ), returned AS (
-        SELECT s."salespersonId" AS id, TRIM(r."currencyCode") AS currency, SUM(r.total - r."taxAmount") AS net
-        FROM sale_returns r JOIN sales s ON s.id = r."originalSaleId"
+        SELECT s."salespersonId" AS id, TRIM(r."currencyCode") AS currency, SUM(${RETURN_TOTAL} - ${RETURN_TAX}) AS net
+        FROM sale_returns r ${RETURNED_STORED_VALUE} JOIN sales s ON s.id = r."originalSaleId"
         WHERE ${RETURNS_IN_PERIOD} AND s."salespersonId" IS NOT NULL GROUP BY 1, 2
       ), people AS (
         SELECT id, currency FROM sold UNION SELECT id, currency FROM returned

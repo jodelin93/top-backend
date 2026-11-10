@@ -20,6 +20,12 @@ import { AuditService } from '../audit/audit.service';
 import { requestContext } from '../common/context/request-context';
 import { round2 } from '../sales/sale-calculator';
 import {
+  EXCHANGE_CREDIT_CODE,
+  GIFT_CARD_CODE,
+  ON_ACCOUNT_CODE,
+  STORE_CREDIT_CODE,
+} from '../sales/special-tenders';
+import {
   applyPointChange,
   LoyaltyRules,
   pointsEarned,
@@ -29,6 +35,16 @@ import {
 
 // Payment method customers use to pay with points
 export const LOYALTY_METHOD_CODE = 'LOYALTY';
+
+// Tenders that earn no loyalty points (money earned on elsewhere, or not yet
+// paid); a return gives back no points for what was refunded to them either
+export const NO_LOYALTY_TENDERS: readonly string[] = [
+  LOYALTY_METHOD_CODE,
+  GIFT_CARD_CODE,
+  STORE_CREDIT_CODE,
+  EXCHANGE_CREDIT_CODE,
+  ON_ACCOUNT_CODE,
+];
 
 @Injectable()
 export class LoyaltyService {

@@ -243,6 +243,8 @@ const TOTALS_BY_CURRENCY = `
     SELECT TRIM(s."currencyCode") AS c, SUM(p.amount) AS total
     FROM payments p JOIN sales s ON s.id = p."saleId" WHERE ${IN_PERIOD} AND ${SOLD} AND ${PAID} GROUP BY 1
   ), rets AS (
+    -- Gross on purpose, gift cards included: matched against refunds paid (which
+    -- include a gift card's cash), like sales against payments above
     SELECT TRIM(r."currencyCode") AS c, SUM(r.total) AS total FROM sale_returns r WHERE ${RETURNS_IN_PERIOD} GROUP BY 1
   ), refunds AS (
     SELECT TRIM(r."currencyCode") AS c, SUM(rf.amount) AS total

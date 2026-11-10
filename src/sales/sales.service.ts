@@ -1,9 +1,6 @@
 import { createHash } from 'crypto';
 import { AuditService } from '../audit/audit.service';
-import {
-  LOYALTY_METHOD_CODE,
-  LoyaltyService,
-} from '../loyalty/loyalty.service';
+import { LoyaltyService, NO_LOYALTY_TENDERS } from '../loyalty/loyalty.service';
 import { EstimatesService } from '../estimates/estimates.service';
 import {
   BadRequestException,
@@ -275,14 +272,6 @@ export interface SaleChangeTender {
 const SALE_REFERENCE = 'sale';
 // How long a "being cancelled" flag blocks completion of a payment_pending sale
 const GIFT_CARD_UNUSABLE = "This gift card can't be used";
-// Tenders that earn no loyalty points
-const NO_LOYALTY_TENDERS = [
-  LOYALTY_METHOD_CODE,
-  GIFT_CARD_CODE,
-  STORE_CREDIT_CODE,
-  EXCHANGE_CREDIT_CODE,
-  ON_ACCOUNT_CODE,
-];
 // A sale recorded without a shift can be voided this long after it was made
 const VOID_WITHOUT_SHIFT_MS = 24 * 3_600_000;
 
@@ -1579,6 +1568,17 @@ export class SalesService implements OnModuleInit {
       if (returned) {
         throw new ConflictException(
           'This sale already has a return or refund: use a return instead of a void',
+        );
+      }
+      // The replacement sale of an exchange is paid with the returned goods'
+      // credit: a void would neither restore nor refund it
+      const [exchange] = await manager.query<{ id: string }[]>(
+        `SELECT id FROM exchange_links WHERE "tenantId" = $1 AND "newSaleId" = $2 LIMIT 1`,
+        [tenantId, id],
+      );
+      if (exchange) {
+        throw new ConflictException(
+          'This sale completes an exchange: use a return instead of a void',
         );
       }
       const updated = await manager.update(

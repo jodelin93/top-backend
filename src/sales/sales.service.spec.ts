@@ -3008,6 +3008,23 @@ describe('SalesService', () => {
       ).rejects.toThrow('already has a return');
       expect(manager.update).not.toHaveBeenCalled();
     });
+
+    it('refuses the replacement sale of an exchange (its credit would vanish)', async () => {
+      completed({ saleType: 'exchange' });
+      manager.query.mockImplementation((sql: string) =>
+        Promise.resolve(
+          sql.includes('exchange_links') ? [{ id: 'link-1' }] : [],
+        ),
+      );
+      await expect(
+        service.void(TENANT, USER, 'sale-1', 'Mistake'),
+      ).rejects.toThrow('completes an exchange');
+      expect(manager.query).toHaveBeenCalledWith(
+        expect.stringContaining('"newSaleId" = $2'),
+        [TENANT, 'sale-1'],
+      );
+      expect(manager.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('loyalty points', () => {

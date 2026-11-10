@@ -1,5 +1,6 @@
 import type { DataSource } from 'typeorm';
 import { ReconciliationReportService } from './reconciliation.service';
+import { RETURNED_STORED_VALUE } from './report-definitions';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const BRANCH = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -66,6 +67,17 @@ describe('reconciliation totals', () => {
     const totalsSql = query.mock.calls[0][0];
     expect(totalsSql).toMatch(/TRIM\(s\."currencyCode"\) AS c/);
     expect(totalsSql).toContain('GROUP BY 1');
+  });
+
+  it('compares returns and refunds paid gross, gift cards on both sides', async () => {
+    // A gift card returned for cash is in refunds paid: taking it off returns
+    // alone (as net sales do) would flag every such return as unbalanced
+    const { service, query } = setup();
+    await service.run(TENANT, RANGE);
+    const totalsSql = query.mock.calls[0][0];
+    expect(totalsSql).toContain('SUM(r.total) AS total FROM sale_returns r');
+    expect(totalsSql).toContain('SUM(rf.amount)');
+    expect(totalsSql).not.toContain(RETURNED_STORED_VALUE);
   });
 
   it('limits every check to the branch and skips store-wide ones', async () => {

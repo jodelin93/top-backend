@@ -9,6 +9,9 @@ import {
   EXCHANGE_CREDIT_METHOD,
   ORDER_DEPOSIT_METHOD,
   LINE_GROSS_EX_TAX,
+  RETURN_TAX,
+  RETURN_TOTAL,
+  RETURNED_STORED_VALUE,
   REVENUE_LINE,
   STORED_VALUE_LINE,
   supplierAgingCte,
@@ -191,17 +194,10 @@ export class ReportsService {
 
     // Returns processed in the period (by return date, like a till's day report)
     const returnRows = await q<ReturnsRow[]>(
-      `WITH sv AS (
-         -- Gift cards given back: stored value, never in net sales, so never off them
-         SELECT ri."returnId", SUM(ri.total) AS total, SUM(ri."taxAmount") AS tax
-         FROM sale_return_items ri JOIN sale_items i ON i.id = ri."saleItemId"
-         WHERE ri."returnId" IN (SELECT r.id FROM sale_returns r WHERE ${returned}) AND ${STORED_VALUE_LINE}
-         GROUP BY 1
-       ), rets AS (
-         SELECT r.id, r."currencyCode",
-                r.total - COALESCE(sv.total, 0) AS total,
-                r."taxAmount" - COALESCE(sv.tax, 0) AS "taxAmount"
-         FROM sale_returns r LEFT JOIN sv ON sv."returnId" = r.id WHERE ${returned}
+      `WITH rets AS (
+         -- Net of gift cards given back (stored value, never in net sales)
+         SELECT r.id, r."currencyCode", ${RETURN_TOTAL} AS total, ${RETURN_TAX} AS "taxAmount"
+         FROM sale_returns r ${RETURNED_STORED_VALUE} WHERE ${returned}
        ), restocked AS (
          -- Restocked items come back into inventory: no longer a cost of sale
          SELECT ri."returnId", SUM(COALESCE(si.cost, 0) * ri.quantity) AS cost
@@ -253,8 +249,9 @@ export class ReportsService {
          FROM sales s LEFT JOIN sale_items i ON i."saleId" = s.id AND ${REVENUE_LINE}
          WHERE ${completed} AND ${inStoreCurrency} GROUP BY 1
        ), returned AS (
-         SELECT (r.created_at AT TIME ZONE $5)::date AS day, SUM(r.total - r."taxAmount") AS net
-         FROM sale_returns r WHERE ${returned} AND TRIM(r."currencyCode") = $4 GROUP BY 1
+         SELECT (r.created_at AT TIME ZONE $5)::date AS day, SUM(${RETURN_TOTAL} - ${RETURN_TAX}) AS net
+         FROM sale_returns r ${RETURNED_STORED_VALUE}
+         WHERE ${returned} AND TRIM(r."currencyCode") = $4 GROUP BY 1
        )
        SELECT TO_CHAR(COALESCE(sold.day, returned.day), 'YYYY-MM-DD') AS "date",
               COALESCE(sold."saleCount", 0) AS "saleCount",

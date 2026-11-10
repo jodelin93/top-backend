@@ -243,6 +243,55 @@ describe('ShiftsService.recordCashMovement', () => {
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
+  describe('cash refunds while the drawer is being counted', () => {
+    const refund = (shiftId: string) => ({
+      tenantId: TENANT,
+      shiftId,
+      type: CashMovementType.REFUND,
+      amount: 500,
+      userId: cashier.id,
+      sourceType: 'return',
+      sourceId: 'ret-1',
+    });
+
+    it('refuses a cash refund on a shift being counted (409)', async () => {
+      const shift = makeShift({ status: ShiftStatus.CLOSING });
+      const { service, movementRepo } = setup(shift);
+      const { manager: m } = (service as unknown as { dataSource: DataSource })
+        .dataSource;
+      await expect(
+        service.recordCashMovement(m, refund(shift.id)),
+      ).rejects.toThrow(
+        'Cash is being counted on this register: finish or cancel the count before refunding cash',
+      );
+      expect(movementRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('posts the cash refund once the shift is open again', async () => {
+      const shift = makeShift({ status: ShiftStatus.OPEN });
+      const { service, movementRepo } = setup(shift);
+      const { manager: m } = (service as unknown as { dataSource: DataSource })
+        .dataSource;
+      await service.recordCashMovement(m, refund(shift.id));
+      expect(movementRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ type: CashMovementType.REFUND, amount: 500 }),
+      );
+    });
+
+    it('still answers a retry of a refund posted before the count started', async () => {
+      const shift = makeShift({ status: ShiftStatus.CLOSING });
+      const { service, movementRepo } = setup(shift);
+      const existing = { id: 'mv-existing', sourceId: 'ret-1' };
+      movementRepo.findOne.mockResolvedValueOnce(existing as never);
+      const { manager: m } = (service as unknown as { dataSource: DataSource })
+        .dataSource;
+      await expect(
+        service.recordCashMovement(m, refund(shift.id)),
+      ).resolves.toBe(existing);
+      expect(movementRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
   it('returns the existing movement for an expense already posted', async () => {
     const shift = makeShift({ status: ShiftStatus.OPEN });
     const { service, movementRepo } = setup(shift);

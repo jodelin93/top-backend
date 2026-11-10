@@ -457,8 +457,13 @@ describe('Branch-level access (AC15)', () => {
         { createQueryBuilder: () => qb },
       ]);
       await asBranchA(() => service.listStock(TENANT, {}));
-      const location = wheres.find((w) => w.sql.includes('branch_warehouses'));
+      // The scope's location filter (the assortment rule reads branch_warehouses too)
+      const location = wheres.find(
+        (w) =>
+          w.sql.includes('branch_warehouses') && !!w.params?.branchScopeIds,
+      );
       expect(location?.params).toEqual({ branchScopeIds: [A] });
+      expect(location?.sql).toContain('"location"."id" IN');
     });
 
     it('no adjustment at a branch-B location', async () => {

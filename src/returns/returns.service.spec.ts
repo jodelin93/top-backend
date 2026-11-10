@@ -3,7 +3,12 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
+import {
+  DataSource,
+  EntityManager,
+  FindOperator,
+  QueryFailedError,
+} from 'typeorm';
 import { Sale, SaleStatus } from '../database/entities/sale.entity';
 import { SaleItem } from '../database/entities/sale-item.entity';
 import { Payment, PaymentStatus } from '../database/entities/payment.entity';
@@ -269,6 +274,7 @@ describe('ReturnsService', () => {
   };
   const outbox = { record: jest.fn() };
   const audit = { record: jest.fn() };
+  const loyalty = { onReturn: jest.fn() };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -299,7 +305,7 @@ describe('ReturnsService', () => {
           provide: PaymentProviderRegistry,
           useValue: { has: () => false, get: jest.fn() },
         },
-        { provide: LoyaltyService, useValue: { onReturn: jest.fn() } },
+        { provide: LoyaltyService, useValue: loyalty },
         { provide: CustomerCreditService, useValue: customerCredit },
         { provide: StoredValueService, useValue: storedValue },
         { provide: OutboxService, useValue: outbox },
@@ -323,6 +329,31 @@ describe('ReturnsService', () => {
           data.length > 0 &&
           'paymentMethodId' in (data[0] as object),
       );
+
+  // Tenders that earn no loyalty points, looked up by code (In [...]) like the service
+  const noPointMethods = [
+    { id: 'loyalty', code: 'LOYALTY' },
+    { id: 'gift_card', code: 'GIFT_CARD' },
+    { id: 'store_credit', code: 'STORE_CREDIT' },
+    { id: 'exchange_credit', code: 'EXCHANGE_CREDIT' },
+    { id: 'onacct', code: 'ON_ACCOUNT' },
+  ];
+  const defaultFind = manager.find.getMockImplementation()!;
+  const withNoPointMethods = (items: object[] = [saleItem]) =>
+    manager.find.mockImplementation(((
+      entity: unknown,
+      options?: { where?: { code?: unknown } },
+    ) => {
+      if (
+        entity === PaymentMethod &&
+        options?.where?.code instanceof FindOperator
+      ) {
+        return Promise.resolve(noPointMethods);
+      }
+      if (entity === SaleItem) return Promise.resolve(items);
+      return defaultFind(entity);
+    }) as never);
+  afterEach(() => manager.find.mockImplementation(defaultFind));
 
   describe('idempotency', () => {
     const validateDto = (body: object) =>
@@ -918,6 +949,94 @@ describe('ReturnsService', () => {
         }),
       );
     });
+
+    describe('loyalty points', () => {
+      const loyaltyMethod = {
+        ...method('loyalty', PaymentMethodType.OTHER),
+        code: 'LOYALTY',
+      };
+      beforeEach(() => {
+        withCustomer();
+        withNoPointMethods();
+      });
+      const reversed = () =>
+        (loyalty.onReturn.mock.calls[0] as [unknown, object])[1];
+
+      it('takes back the points of money refunded to the card', async () => {
+        await service.create(TENANT, OWNER, returnDto());
+        expect(reversed()).toMatchObject({
+          customerId: 'cust-1',
+          moneyRefunded: 10,
+          pointsRefundedAmount: 0,
+        });
+      });
+
+      it('keeps the original points on an even exchange (the replacement earns none)', async () => {
+        await service.create(TENANT, OWNER, returnDto(), undefined, {
+          exchange: { newSaleTotal: 10 },
+        });
+        expect(savedRefunds()).toEqual([
+          expect.objectContaining({
+            paymentMethodId: 'exchange_credit',
+            amount: 10,
+          }),
+        ]);
+        expect(reversed()).toMatchObject({
+          moneyRefunded: 0,
+          pointsRefundedAmount: 0,
+        });
+      });
+
+      it('takes no points back for a gift card brought back (it earned none)', async () => {
+        withNoPointMethods([
+          { ...saleItem, metadata: { storedValue: true, giftCard: true } },
+        ]);
+        await service.create(TENANT, OWNER, returnDto());
+        expect(storedValue.voidSaleGiftCards).toHaveBeenCalled();
+        expect(reversed()).toMatchObject({ moneyRefunded: 0 });
+      });
+
+      it('takes back only the share paid with money, not the share on account', async () => {
+        payments = [
+          payment('pay-acct', onAccountMethod, '15'),
+          payment('pay-cash', methods[1], '5'),
+        ];
+        await service.create(TENANT, OWNER, returnDto());
+        // 7.50 back on the account earned nothing; 2.50 cash did
+        expect(reversed()).toMatchObject({
+          moneyRefunded: 2.5,
+          pointsRefundedAmount: 0,
+        });
+      });
+
+      it('gives back points refunded to the points method instead of taking any off', async () => {
+        payments = [
+          payment('pay-points', loyaltyMethod, '10'),
+          payment('pay-cash', methods[1], '10'),
+        ];
+        await service.create(TENANT, OWNER, returnDto());
+        // Non-cash first: it all goes back to the points, none of it earned any
+        expect(savedRefunds()).toEqual([
+          expect.objectContaining({ paymentMethodId: 'loyalty', amount: 10 }),
+        ]);
+        expect(reversed()).toMatchObject({
+          moneyRefunded: 0,
+          pointsRefundedAmount: 10,
+        });
+      });
+    });
+
+    it('still refunds to the card while the drawer is being counted', async () => {
+      shiftsService.getOpenShift.mockResolvedValueOnce({
+        id: 'shift-1',
+        status: 'closing',
+      } as never);
+      await service.create(TENANT, OWNER, returnDto());
+      expect(savedRefunds()).toEqual([
+        expect.objectContaining({ paymentMethodId: 'card', amount: 10 }),
+      ]);
+      expect(shiftsService.recordCashMovement).not.toHaveBeenCalled();
+    });
   });
 
   describe('exchange credit refunds (cancel / replacement worth less)', () => {
@@ -1068,6 +1187,68 @@ describe('ReturnsService', () => {
       expect(shiftsService.recordCashMovement).toHaveBeenCalledWith(
         manager,
         expect.objectContaining({ amount: 10, approverId: 'manager-1' }),
+      );
+    });
+
+    it('puts the cash of every release in the drawer, after the cash the return gave back', async () => {
+      // Like the unique index on cash_movements: one row per (sourceType, sourceId)
+      const posted = new Map<string, number>([['return|ret-1', 6]]);
+      shiftsService.recordCashMovement.mockImplementation(
+        (
+          _m: unknown,
+          input: { sourceType: string; sourceId: string; amount: number },
+        ) => {
+          const key = `${input.sourceType}|${input.sourceId}`;
+          if (!posted.has(key)) posted.set(key, input.amount);
+          return Promise.resolve({ amount: posted.get(key) });
+        },
+      );
+      const defaultSave = manager.save.getMockImplementation()!;
+      let rowId = 0;
+      manager.save.mockImplementation(((data: object) =>
+        Promise.resolve(
+          Array.isArray(data)
+            ? data.map((row: object) => ({ ...row, id: `refund-${++rowId}` }))
+            : { id: 'ret-1', ...data },
+        )) as never);
+      try {
+        await release(OWNER, {
+          amount: 4,
+          cancel: false,
+          refundMethodId: 'cash',
+        });
+        await release(OWNER, {
+          amount: 3,
+          cancel: false,
+          refundMethodId: 'cash',
+        });
+      } finally {
+        manager.save.mockImplementation(defaultSave);
+        shiftsService.recordCashMovement.mockReset();
+      }
+      expect([...posted]).toEqual([
+        ['return|ret-1', 6],
+        ['return-credit|refund-1', 4],
+        ['return-credit|refund-2', 3],
+      ]);
+    });
+
+    it('takes back the points of credit refunded as money (exchange credit earned none back)', async () => {
+      withNoPointMethods();
+      const findOne = manager.findOne.getMockImplementation()!;
+      manager.findOne.mockImplementation(((entity: unknown) =>
+        entity === Sale
+          ? Promise.resolve({ ...sale, customerId: 'cust-1' })
+          : findOne(entity)) as never);
+      await release(OWNER, {});
+      expect(loyalty.onReturn).toHaveBeenCalledWith(
+        manager,
+        expect.objectContaining({
+          customerId: 'cust-1',
+          returnId: 'ret-1',
+          moneyRefunded: 10,
+          pointsRefundedAmount: 0,
+        }),
       );
     });
 

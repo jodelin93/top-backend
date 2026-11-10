@@ -87,6 +87,7 @@ import { requestContext } from '../common/context/request-context';
 import {
   LOYALTY_METHOD_CODE,
   LoyaltyService,
+  NO_LOYALTY_TENDERS,
 } from '../loyalty/loyalty.service';
 import {
   allocateToOriginalTenders,
@@ -645,7 +646,7 @@ export class ReturnsService {
             userId: user.id,
             approverId,
             reason: `Return ${returnNumber}`,
-            returnId: saleReturn.id,
+            source: { type: 'return', id: saleReturn.id },
           });
         }
 
@@ -664,24 +665,25 @@ export class ReturnsService {
           );
         }
         if (sale.customerId) {
-          // Points earned on the refunded money come back off; points spent are given back
-          const loyaltyMethod = await manager.findOne(PaymentMethod, {
-            where: { tenantId, code: LOYALTY_METHOD_CODE },
-          });
-          const pointsRefundedAmount = round2(
-            refunds
-              .filter(
-                (r) => loyaltyMethod && r.paymentMethodId === loyaltyMethod.id,
-              )
-              .reduce((a, r) => a + r.amount, 0),
+          // Points earned on the refunded money come back off; points spent are
+          // given back. As at the sale, money refunded to a tender that earns no
+          // points (exchange credit, on account, gift card, store credit) and
+          // gift cards brought back never earned any
+          const tally = await this.loyaltyTally(manager, tenantId);
+          const storedValueReturned = round2(
+            lines
+              .filter((l) => isStoredValueLine(l.item))
+              .reduce((a, l) => a + l.amounts.total, 0),
           );
           await this.loyaltyService.onReturn(manager, {
             tenantId,
             customerId: sale.customerId,
             saleId: sale.id,
             returnId: saleReturn.id,
-            moneyRefunded: round2(total - pointsRefundedAmount),
-            pointsRefundedAmount,
+            moneyRefunded: round2(
+              Math.max(0, tally.earning(refunds) - storedValueReturned),
+            ),
+            pointsRefundedAmount: tally.points(refunds),
             returnNumber,
           });
         }
@@ -904,10 +906,10 @@ export class ReturnsService {
         );
       }
 
-      const existing = await manager.count(SaleReturnRefund, {
+      const earlier = await manager.find(SaleReturnRefund, {
         where: { tenantId, returnId: saleReturn.id },
       });
-      await manager.save(
+      const saved = await manager.save(
         refunds.map((refund, index) =>
           manager.create(SaleReturnRefund, {
             tenantId,
@@ -920,7 +922,7 @@ export class ReturnsService {
             exchangeRate: refund.tendered?.rate ?? null,
             provider: refund.provider,
             providerReference: refund.providerReference,
-            idempotencyKey: `return:${saleReturn.id}:credit:${existing + index}`,
+            idempotencyKey: `return:${saleReturn.id}:credit:${earlier.length + index}`,
             status:
               refund.provider && refund.provider !== 'manual'
                 ? RefundStatus.PENDING
@@ -944,7 +946,41 @@ export class ReturnsService {
           userId: user.id,
           approverId,
           reason: `Exchange credit refunded (return ${saleReturn.returnNumber})`,
+          // Its own source key: the return's may already carry the cash it
+          // refunded, and the drawer would never see this release's cash
+          source: {
+            type: 'return-credit',
+            id: saved[refunds.findIndex((r) => r.isCash)].id,
+          },
+        });
+      }
+      if (sale.customerId) {
+        // Moving goods' value to exchange credit took no points off: the part now
+        // refunded as money does (gift cards brought back excepted, counted once
+        // over all the return's refunds), and points refunded are given back
+        const tally = await this.loyaltyTally(manager, tenantId);
+        const returnedItems = await manager.find(SaleReturnItem, {
+          where: { tenantId, returnId: saleReturn.id },
+          relations: { saleItem: true },
+        });
+        const storedValueReturned = round2(
+          returnedItems
+            .filter((i) => i.saleItem && isStoredValueLine(i.saleItem))
+            .reduce((a, i) => a + Number(i.total), 0),
+        );
+        const earningBefore = tally.earning(earlier);
+        const earningAfter = round2(earningBefore + tally.earning(refunds));
+        await this.loyaltyService.onReturn(manager, {
+          tenantId,
+          customerId: sale.customerId,
+          saleId: sale.id,
           returnId: saleReturn.id,
+          moneyRefunded: round2(
+            Math.max(0, earningAfter - storedValueReturned) -
+              Math.max(0, earningBefore - storedValueReturned),
+          ),
+          pointsRefundedAmount: tally.points(refunds),
+          returnNumber: saleReturn.returnNumber,
         });
       }
 
@@ -1297,6 +1333,31 @@ export class ReturnsService {
   }
 
   /**
+   * Refunds as loyalty sees them, like the sale's earning: `earning` is the money
+   * refunded to tenders that earn points, `points` what went back to the
+   * "Loyalty points" method (given back as points)
+   */
+  private async loyaltyTally(manager: EntityManager, tenantId: string) {
+    const noPoints = await manager.find(PaymentMethod, {
+      where: { tenantId, code: In([...NO_LOYALTY_TENDERS]) },
+      select: { id: true, code: true },
+    });
+    const noPointIds = new Set(noPoints.map((m) => m.id));
+    const loyaltyId = noPoints.find((m) => m.code === LOYALTY_METHOD_CODE)?.id;
+    type Row = { paymentMethodId: string; amount: number | string };
+    const total = (rows: Row[], keep: (methodId: string) => boolean) =>
+      round2(
+        rows
+          .filter((r) => keep(r.paymentMethodId))
+          .reduce((a, r) => a + Number(r.amount), 0),
+      );
+    return {
+      earning: (rows: Row[]) => total(rows, (id) => !noPointIds.has(id)),
+      points: (rows: Row[]) => total(rows, (id) => id === loyaltyId),
+    };
+  }
+
+  /**
    * Decide how the refund is paid. Default: back to the original payments.
    * Explicit refunds may use any active method; a method used on the sale is linked
    * to that payment (card refunds then go through its provider).
@@ -1317,7 +1378,9 @@ export class ReturnsService {
       userId: string;
       approverId: string | null | undefined;
       reason: string;
-      returnId: string;
+      // Unique key of the movements: 'return' + the return id for a return,
+      // 'return-credit' + one of its refund rows for each exchange credit release
+      source: { type: string; id: string };
     },
   ) {
     const cash = input.refunds.filter((r) => r.isCash);
@@ -1330,11 +1393,7 @@ export class ReturnsService {
       const code = r.tendered.currencyCode;
       foreign.set(code, round2((foreign.get(code) ?? 0) + r.tendered.amount));
     }
-    const post = (
-      amount: number,
-      currencyCode: string | null,
-      sourceType: string,
-    ) =>
+    const post = (amount: number, currencyCode: string | null, suffix = '') =>
       this.shiftsService.recordCashMovement(manager, {
         tenantId: input.tenantId,
         shiftId: input.shiftId,
@@ -1344,13 +1403,13 @@ export class ReturnsService {
         userId: input.userId,
         approverId: input.approverId,
         reason: input.reason,
-        sourceType,
-        sourceId: input.returnId,
+        sourceType: `${input.source.type}${suffix}`,
+        sourceId: input.source.id,
       });
-    if (inSaleCurrency > 0) await post(inSaleCurrency, null, 'return');
+    if (inSaleCurrency > 0) await post(inSaleCurrency, null);
     for (const [code, amount] of foreign) {
       // One source row per currency (the source index is unique per type)
-      if (amount > 0) await post(amount, code, `return:${code}`);
+      if (amount > 0) await post(amount, code, `:${code}`);
     }
   }
 

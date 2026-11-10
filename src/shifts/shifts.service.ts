@@ -332,8 +332,9 @@ export class ShiftsService {
    * Post a cash movement to a shift inside the caller's transaction.
    * Extension point for returns: `type: CashMovementType.REFUND` with
    * `sourceType: 'return', sourceId: <return id>`. The shift row is locked and
-   * must not be closed. A duplicate expense/source/idempotency key returns the
-   * existing row instead of posting twice.
+   * must not be closed; a REFUND also needs it open (not being counted). A
+   * duplicate expense/source/idempotency key returns the existing row instead of
+   * posting twice.
    */
   async recordCashMovement(
     manager: EntityManager,
@@ -352,6 +353,16 @@ export class ShiftsService {
 
     const existing = await this.findDuplicateMovement(manager, input);
     if (existing) return existing;
+    // The drawer is being counted: cash handed back now would not be in the count
+    // (returns, exchange credit and order deposit refunds all post REFUND here)
+    if (
+      input.type === CashMovementType.REFUND &&
+      shift.status !== ShiftStatus.OPEN
+    ) {
+      throw new ConflictException(
+        'Cash is being counted on this register: finish or cancel the count before refunding cash',
+      );
+    }
 
     const repo = manager.getRepository(CashMovement);
     const movement = repo.create({

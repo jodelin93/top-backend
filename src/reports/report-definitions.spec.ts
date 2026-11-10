@@ -1,7 +1,14 @@
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import type { DataSource } from 'typeorm';
 import type { AuditService } from '../audit/audit.service';
-import { findReport, REPORTS, REVENUE_LINE } from './report-definitions';
+import {
+  findReport,
+  REPORTS,
+  RETURN_TAX,
+  RETURN_TOTAL,
+  RETURNED_STORED_VALUE,
+  REVENUE_LINE,
+} from './report-definitions';
 import {
   canRunReport,
   ReportRunnerService,
@@ -81,6 +88,29 @@ describe('report catalog (spec §14)', () => {
         sql: expect.stringContaining(REVENUE_LINE) as string,
       });
     }
+  });
+
+  it('takes returned gift cards (stored value) off returns, never off net sales', () => {
+    // Nov 1 a gift card is sold (not a sale), Nov 2 it is returned for cash:
+    // returns must not count it either, or net sales go negative
+    for (const key of ['sales-by-day', 'sales-by-salesperson']) {
+      const sql = findReport(key)!.sql;
+      expect({ key, joined: sql.includes(RETURNED_STORED_VALUE) }).toEqual({
+        key,
+        joined: true,
+      });
+      expect(sql).toContain(`SUM(${RETURN_TOTAL}`);
+      // The return's raw total / tax (gift cards included) is never summed
+      expect(sql).not.toMatch(/SUM\(r\.(total|"taxAmount")/);
+    }
+    expect(findReport('sales-by-day')!.sql).toContain(`SUM(${RETURN_TAX})`);
+    // Refunds processed per cashier: the money handed back, gift cards included
+    expect(findReport('sales-by-cashier')!.sql).toContain(
+      'SUM(r.total) AS refunds',
+    );
+    expect(RETURNED_STORED_VALUE).toContain(
+      "COALESCE((i.metadata->>'storedValue')::boolean, false) = true",
+    );
   });
 
   it('keeps exchange credit (an internal tender) out of the tender mix', () => {
